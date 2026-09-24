@@ -1,0 +1,67 @@
+# Robot-only desktop companion and shortcut revision
+
+- [x] Inspect current desktop robot window, Main screen, tray, and lifecycle behavior.
+- [x] Add the user-provided robot artwork to the desktop resources without adding speech bubbles or control labels.
+- [x] Remove the robot from the main application screen while preserving the settings and assistant controls needed for configuration.
+- [x] Make the floating companion robot-only and clickable for start/stop behavior, with no visible text, hide button, or close button.
+- [x] Preserve manual drag positioning and saved location across restarts.
+- [x] Verify compile and test tasks; startup/tray behavior is wired for robot-only use.
+- [x] Add the robot ICO to the Windows-specific distribution configuration and create `VoiceBrainLive.lnk` on the user's Desktop.
+- [ ] Retry full distributable packaging if the existing Compose output-directory lock is released.
+- [x] Validate Gemini API-key presence and source without exposing the secret.
+- [x] Validate Gemini Live endpoint/model configuration and Windows DNS/TLS/network reachability.
+- [x] Reproduce the WebSocket configuration timeout and apply the smallest safe connection fix.
+- [ ] Rebuild and verify a successful Gemini connection or document the remaining external blocker.
+- [ ] Remove any remaining painted background from the robot renderer and reduce the character size again.
+- [x] Redesign the main desktop app screen with clearer hierarchy, modern spacing, and polished status/command sections.
+- [x] Preserve settings, connection testing, text commands, microphone controls, and conversation behavior in the redesigned screen.
+- [x] Rebuild and run the redesigned main screen for verification.
+- [x] Reduce the robot visual size again while preserving its clickable/drag hit area.
+- [x] Tune pointer-following drag, damping, inertia, and screen-boundary clamping for smoother mouse placement.
+- [x] Rebuild and run the desktop app to verify the updated drag behavior.
+- [ ] Stop existing VoiceBrainLive, Java, Gradle, and launcher processes before the verification run.
+- [ ] Rebuild and launch the new app once, confirming Main App and robot startup use the latest code.
+- [x] Reduce the floating robot visual size without shrinking the drag/click behavior incorrectly.
+- [x] Remove the visible rectangular transparent-window edge/background from the robot surface.
+- [x] Smooth 3D body, eye, mouth, color, arm, and leg animation while preserving click/drag/always-on-top behavior.
+- [x] Compile and test the final robot-only rendering.
+- [x] Confirm the current Kotlin/Compose Desktop stack and define the correct role of PyInstaller/Electron Builder.
+- [x] Add a PyInstaller reference wrapper/build script for a Python launcher where applicable.
+- [x] Add an Electron Builder reference configuration/script for a desktop web wrapper where applicable.
+- [x] Add a native Compose/Gradle packaging script for the actual VoiceBrainLive app.
+- [x] Verify the native script orchestration with `compileKotlin`, `test`, and `createDistributable`; document wrapper limitations and exact commands in `WINDOWS_BUILD_GUIDE.md`.
+- [x] Add a safe Command Test Mode for Gemini text and audio flows.
+- [x] Add diagnostic controls for connection/setup, text command, voice toggle, status, success, and error/retry states.
+- [x] Keep API keys and user content out of test logs while exposing sanitized status/results in the UI.
+- [x] Compile and test the Command Test Mode wiring successfully.
+- [x] Add JVM and Gradle startup tuning without disabling the persistent daemon/cache path: filesystem watching, extended daemon lifetime, and Kotlin daemon memory.
+- [x] Keep the hidden launcher offline-first and fall back to online Gradle only when a dependency is missing from cache.
+- [x] Keep AI connection/greeting work deferred until user interaction; retain the fast first-window path.
+- [x] Verify cache invalidation after settings changes and confirm the next run stores a fresh configuration cache; compile/test succeeded in 2 seconds with all tasks up-to-date.
+- [x] Inspect launcher/cache behavior and confirm the optimized offline build path stores a configuration cache entry.
+- [x] Enable Gradle daemon, build cache, configuration cache, Kotlin incremental compilation, and offline shortcut dependency resolution.
+- [x] Verify optimized compile/test path remains successful; Main App, Robot, and Gemini source flow are unchanged except for deferred startup work.
+- [x] Inspect current Gemini Live connection, API key, send-request, and error logs.
+- [x] Make robot click and Main App connect share one serialized connection/reconnect path.
+- [x] Retry failed commands safely with serialized requests and up to three reconnect attempts.
+- [x] Add short activate and deactivate sound effects to robot click-to-toggle listening.
+- [x] Keep sound effects separate from spoken response audio and handle resource/audio failures safely.
+- [x] Compile and test click sound feedback.
+- [x] Add a persisted Always-on-top setting for the floating robot window.
+- [x] Keep the robot above other windows while preserving visibility, drag, damping, and animation behavior.
+- [x] Compile and test Always-on-top mode.
+- [x] Track pointer velocity during robot dragging and apply inertia with damping after release.
+- [x] Clamp damped motion to the visible screen and persist the final settled position.
+- [x] Compile and test the physics-based drag behavior.
+- [x] Replace the blue-background reference image with a transparent robot-only character renderer.
+- [x] Add 3D-style eyes, mouth, body color states, open/close behavior, and articulated arm/leg motion.
+- [x] Verify all character animations compile and respond to assistant states through successful Kotlin compilation and test execution.
+- [x] Identify the Gradle startup work and remove the forced `--no-daemon` JVM restart from the shortcut launcher.
+- [x] Restore stored robot visibility at startup and clamp saved coordinates to the current display bounds so the robot cannot remain off-screen.
+- [x] Verify the changed source compiles and tests successfully; shortcut launch now reuses the Gradle daemon and robot position recovery is bounded.
+- [x] Inspect why the shortcut launcher starts the robot but leaves the main app window hidden.
+- [x] Restore reliable main-window visibility at startup while preserving robot-only desktop use.
+- [x] Verify the corrected source compiles and tests successfully; the main window is now explicitly visible at startup.
+- [x] Inspect the broken shortcut target and identify the missing `.cfg` dependency.
+- [x] Recreate the shortcut against a stable hidden Gradle launcher path while the distributable folder is incomplete.
+- [x] Verify the launcher reaches the desktop robot window without the missing-file error.

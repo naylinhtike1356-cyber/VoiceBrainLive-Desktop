@@ -1,0 +1,39 @@
+{
+  "name": "voicebrainlive-electron-wrapper",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Optional Electron wrapper for the VoiceBrainLive Compose Desktop distribution",
+  "main": "main.cjs",
+  "scripts": {
+    "dist:win": "electron-builder --win nsis portable"
+  },
+  "devDependencies": {
+    "electron": "^36.0.0",
+    "electron-builder": "^26.0.0"
+  },
+  "build": {
+    "appId": "com.example.voicebrainlive.wrapper",
+    "productName": "VoiceBrainLive",
+    "asar": true,
+    "files": ["main.cjs"],
+    "extraResources": [
+      {
+        "from": "../../desktop/build/compose/binaries/main/app/VoiceBrainLive",
+        "to": "VoiceBrainLive"
+      }
+    ],
+    "win": {
+      "target": ["nsis", "portable"],
+      "icon": "../../desktop/src/main/resources/voicebrain_robot.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "VoiceBrainLive"
+    },
+    "portable": {
+      "artifactName": "VoiceBrainLive-Portable-${version}.${ext}"
+    }
+  }
+}

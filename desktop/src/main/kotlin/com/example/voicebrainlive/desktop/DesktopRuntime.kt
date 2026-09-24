@@ -1,0 +1,761 @@
+package com.example.voicebrainlive.desktop
+
+import com.example.voicebrainlive.desktop.core.AssistantController
+import com.example.voicebrainlive.desktop.core.CommandResult
+import com.example.voicebrainlive.desktop.core.DesktopCommand
+import com.example.voicebrainlive.desktop.platform.ApiKeyStore
+import com.example.voicebrainlive.desktop.platform.DesktopLogger
+import com.example.voicebrainlive.desktop.platform.GeminiLiveSession
+import com.example.voicebrainlive.desktop.platform.GlobalHotkeyManager
+import com.example.voicebrainlive.desktop.platform.WindowsAudioEngine
+import com.example.voicebrainlive.desktop.platform.WindowsCommandExecutor
+import com.example.voicebrainlive.desktop.platform.SoundEffects
+import com.example.voicebrainlive.desktop.platform.WindowsTrayManager
+import com.example.voicebrainlive.desktop.platform.NotionClient
+import com.example.voicebrainlive.desktop.core.UserMemoryStore
+import com.example.voicebrainlive.desktop.core.ProfileManager
+import com.example.voicebrainlive.desktop.core.MacroManager
+import com.example.voicebrainlive.desktop.core.OfflineCommandMatcher
+import java.io.File
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+
+class DesktopRuntime(
+    private val onExitRequested: () -> Unit,
+    private val onMainWindowRequested: () -> Unit = {},
+    private val onToggleMainWindowRequested: () -> Unit = onMainWindowRequested,
+) {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val _liveVolumeLevel = MutableStateFlow(0f)
+    val liveVolumeLevel: StateFlow<Float> = _liveVolumeLevel.asStateFlow()
+    private val _voiceTypingMode = MutableStateFlow(false)
+    val voiceTypingMode: StateFlow<Boolean> = _voiceTypingMode.asStateFlow()
+    private val _commandModeRequest = MutableStateFlow(0L)
+    val commandModeRequest: StateFlow<Long> = _commandModeRequest.asStateFlow()
+    private val soundEffects = SoundEffects()
+    private val commandExecutor = WindowsCommandExecutor()
+    private val apiKeyStore = ApiKeyStore()
+    val userMemoryStore = UserMemoryStore()
+    val profileManager = ProfileManager()
+    val macroManager = MacroManager(commandExecutor)
+    private var notionClient = NotionClient(apiKeyStore.loadNotionToken(), apiKeyStore.loadNotionParentPageId())
+    private var listening = false
+    private var liveConversationMode = false
+    private var pendingPowerCall: PendingPowerCall? = null
+    private var robotVisible = apiKeyStore.loadRobotVisible()
+    // Tool availability is no longer controlled by the old Settings toggle.
+    // Each action is protected by fresh user-speech gating and confirmations.
+    private var desktopAutomationEnabled = true
+    @Volatile private var closed = false
+    @Volatile private var liveAudioReceivedForTurn = false
+    @Volatile private var userSpeechDetectedForTurn = false
+    private val inputTranscriptBuffer = StringBuilder()
+    private val preSetupAudioBuffer = mutableListOf<String>()
+
+    private lateinit var session: GeminiLiveSession
+    private lateinit var controller: AssistantController
+    private lateinit var audio: WindowsAudioEngine
+
+    val assistant: AssistantController
+        get() = controller
+
+    private val tray = WindowsTrayManager(
+        onShow = onMainWindowRequested,
+        onCommandMode = ::requestCommandMode,
+        onShowRobot = { setRobotVisible(true) },
+        onHideRobot = { setRobotVisible(false) },
+        onToggleListening = ::toggleListening,
+        onVisionScan = ::triggerVisionAnalysis,
+        onReadClipboard = ::triggerClipboardRead,
+        onExit = onExitRequested,
+    )
+
+    private val hotkey = GlobalHotkeyManager(
+        onHotkey = ::toggleListening,
+        onCommandHotkey = ::requestCommandMode,
+        onToggleWindow = ::toggleMainWindow,
+        onToggleRobot = ::toggleRobotVisible,
+        onVisionHotkey = ::triggerVisionAnalysis,
+        onClipboardHotkey = ::triggerClipboardRead,
+    )
+
+    init {
+        val key = apiKeyStore.load()
+        session = createSession(key)
+        controller = AssistantController(session)
+        audio = WindowsAudioEngine(
+            onSpeakingStateChanged = { isSpeaking ->
+                controller.updateSpeaking(isSpeaking)
+                if (isSpeaking) {
+                    controller.updateStatus("🔊 ဖြေကြားနေပါတယ်…")
+                } else if (listening) {
+                    controller.updateStatus("အသင့်ဖြစ်ပါပြီ — 🎤 နားထောင်နေပါသည်")
+                } else {
+                    controller.updateStatus("အသင့်ဖြစ်ပါပြီ")
+                }
+            }
+        )
+        if (key.isNotBlank()) {
+            scope.launch {
+                controller.connect()
+            }
+        }
+    }
+
+    private fun createSession(savedKey: String): GeminiLiveSession {
+        DesktopLogger.info("Creating Gemini session; keyConfigured=${savedKey.isNotBlank()}")
+        val key = savedKey.ifBlank {
+            System.getenv("GEMINI_API_KEY") ?: System.getProperty("GEMINI_API_KEY", "")
+        }
+        val memoryContext = userMemoryStore.toSystemInstructionContext()
+        val activeProfile = profileManager.getActiveProfile()
+        val dynamicInstructions = """
+            You are VoiceBrainLive Desktop, an elite, friendly, warm, polite, and helpful Burmese-speaking Windows computer assistant and tech expert (နည်းပညာကျွမ်းကျင်သူ ကွန်ပျူတာ ပါတနာ) for user profile '$activeProfile'.
+            
+            LANGUAGE, PERSONALITY & SPOKEN CONVERSATION (မြန်မာစကားပြောနှင့် သွက်လက်စွာ ဆွေးနွေးခြင်း):
+            - အသုံးပြုသူ မေးမြန်းသည်များ၊ ခိုင်းစေသည်များကို အမြဲတမ်း သဘာဝကျပြီး သွက်လက်ယဉ်ကျေးသော မြန်မာစကားပြောဖြင့် ရှင်းလင်းပြတ်သားစွာ အသံထွက် ဖြေကြားပေးပါ။
+            - စကားပြောရာတွင် လိုရင်းတိုရှင်း၊ သဘာဝကျကျ၊ လူသားတစ်ယောက်လို နွေးထွေးဖော်ရွေစွာ ဖြေကြားပါ။
+            - "I am an AI assistant" သို့မဟုတ် "<no speech detected>" စသည့် စကားလုံး/tags များကို ဘယ်သောအခါမှ ထုတ်မပြောပါနှင့်။
+            - အသုံးပြုသူ၏ လက်ရှိမေးခွန်း/ပြောဆိုချက်ကို အဓိကထား၍ အကြောင်းအရာနှင့် ကိုက်ညီသော အဖြေကို သဘာဝကျကျ အသစ်စဉ်းစား ဖြေကြားပါ။
+            $memoryContext
+            
+            WINDOWS AUTOMATION, TECH EXPERT & NOTION INTEGRATION:
+            - You may call execute_desktop_command for Windows actions and Notion workspace management:
+            - open_app, close_app, search_web, search_youtube, search_files, find_file, open_file, open_url, open_folder, open_downloads, open_documents, open_desktop, open_recycle_bin, empty_recycle_bin, get_current_time, get_current_date, open_settings, open_network_settings, open_bluetooth_settings, open_display_settings, open_sound_settings, take_screenshot, volume_up, volume_down, mute, lock_computer, shutdown, restart, sleep, system_status, get_system_info, diagnose_network, get_battery_status, list_running_apps, copy_to_clipboard, run_powershell_safe, refresh_file_index, get_active_window, solve_project_issue, auto_heal_project, launch_coding_agent, run_android_build_test, verify_app_on_emulator, git_commit_fix, check_adb_devices.
+            - Notion Integration: notion_test, notion_search, notion_get_page_content, notion_create_page, notion_add_note, notion_create_task, notion_append_note, notion_append_to_page, notion_update_page_title, notion_archive_page, notion_delete_page, notion_delete_block, open_notion_page.
+            - Agentic memory & context: get_active_window, remember_user_fact, get_user_memory, run_work_macro, switch_user_profile, analyze_screen, read_clipboard, media_play_pause, media_next, media_prev, minimize_all, maximize_window, minimize_window, close_window, close_tab, brightness_up, brightness_down.
+            - When user commands an action, execute the appropriate tool IMMEDIATELY and reply concisely with the action outcome in Burmese audio.
+            - When asked technical, programming, Android, or IT questions, give clear, direct, step-by-step explanations in Burmese.
+        """.trimIndent()
+
+        val selectedModel = apiKeyStore.loadGeminiModel()
+        return GeminiLiveSession(
+            apiKey = key,
+            modelName = selectedModel,
+            allowDesktopTools = true,
+            systemInstruction = dynamicInstructions,
+            onInputTranscript = { text ->
+                if (text.isNotBlank()) {
+                    userSpeechDetectedForTurn = true
+                    DesktopLogger.info("Live input transcript: ${text.trim()}")
+                }
+                if (_voiceTypingMode.value && isVoiceTypingStopPhrase(text)) {
+                    setVoiceTypingMode(false)
+                } else {
+                    val transcript = synchronized(inputTranscriptBuffer) {
+                        mergeTranscriptPiece(inputTranscriptBuffer, text)
+                    }
+                    controller.updateTranscript(transcript)
+                }
+                handlePowerConfirmation(text)
+            },
+            onOutputTranscript = { text ->
+                DesktopLogger.info("Live output transcript: ${text.trim()}")
+                assistant.updateResponse(text)
+            },
+            onAudioResponse = { payload ->
+                liveAudioReceivedForTurn = true
+                audio.playPcmBase64(payload)
+            },
+            onTurnComplete = {
+                val inputTranscript = synchronized(inputTranscriptBuffer) {
+                    val result = inputTranscriptBuffer.toString().trim()
+                    inputTranscriptBuffer.setLength(0)
+                    result
+                }
+                if (_voiceTypingMode.value && inputTranscript.isNotBlank()) {
+                    val result = commandExecutor.typeTextIntoActiveWindow(inputTranscript)
+                    controller.updateResponse(result.message)
+                    controller.updateStatus(if (result.success) "⌨️ စာသားကို ထည့်ပြီးပါပြီ" else result.message)
+                }
+                liveAudioReceivedForTurn = false
+                userSpeechDetectedForTurn = false
+                if (!audio.isSpeaking()) {
+                    controller.updateStatus("အသင့်ဖြစ်ပါပြီ — 🎤 နားထောင်နေပါသည်")
+                }
+            },
+            onSetupComplete = {
+                // Flush pre-buffered audio captured while connecting
+                val buffered = synchronized(preSetupAudioBuffer) {
+                    val list = preSetupAudioBuffer.toList()
+                    preSetupAudioBuffer.clear()
+                    list
+                }
+                for (chunk in buffered) {
+                    session.sendAudioChunk(chunk)
+                }
+                controller.updateStatus("အသင့်ဖြစ်ပါပြီ — 🎤 နားထောင်နေပါသည်")
+            },
+            onInterrupted = {
+                audio.stopPlayback()
+                controller.updateStatus("🎤 ဆက်လက် နားထောင်နေပါတယ်…")
+            },
+            onToolCall = { callId, commandType, target, value ->
+                scope.launch {
+                    if (!userSpeechDetectedForTurn) {
+                        DesktopLogger.warn("Ignored unsolicited tool call type=$commandType without user speech")
+                        session.sendToolResponse(callId, "လုပ်ဆောင်ချက်ကို မလုပ်ပါ။ အသုံးပြုသူ၏ ရှင်းလင်းသော ခိုင်းစေချက် မရရှိပါ။")
+                        controller.updateStatus("ရှင်းလင်းသော ခိုင်းစေချက်ကို စောင့်နေပါတယ်")
+                        return@launch
+                    }
+                    controller.updateStatus("လုပ်ဆောင်နေပါတယ်…")
+                    val result = executeDesktopCommand(DesktopCommand(commandType, target, value))
+                    controller.updateResponse(result.message)
+                    if (result.requiresConfirmation) {
+                        pendingPowerCall = PendingPowerCall(callId, DesktopCommand(commandType, target, value))
+                        controller.updateStatus("အသံဖြင့် အတည်ပြုချက်ကို စောင့်နေပါတယ်")
+                        session.sendText("အရေးကြီးပါတယ်။ ${result.message} အသံနဲ့ အတည်ပြုလိုပါသလား။ အတည်ပြုမယ်ဆိုရင် ဟုတ်ကဲ့ သို့မဟုတ် Confirm လို့ ပြောပါ။ မလုပ်လိုရင် မလုပ်ပါနဲ့ သို့မဟုတ် Cancel လို့ ပြောပါ။")
+                    } else {
+                        controller.recordAction(commandType, result)
+                        DesktopLogger.info("Command $commandType success=${result.success}")
+                        controller.updateStatus(if (result.success) "ပြီးပါပြီ" else "မအောင်မြင်ပါ")
+                        session.sendToolResponse(callId, result.message)
+                    }
+                }
+            },
+            onStatus = {
+                DesktopLogger.info("Gemini status: $it")
+                controller.updateStatus(it)
+            },
+            onExecuteToolDirect = { cmd, target, value ->
+                val res = executeDesktopCommand(DesktopCommand(cmd, target, value))
+                controller.recordAction(cmd, res)
+                res.message
+            },
+        )
+    }
+
+    fun storedApiKey(): String = apiKeyStore.load()
+
+    fun storedGeminiModel(): String = apiKeyStore.loadGeminiModel()
+
+    fun desktopAutomationEnabled(): Boolean = desktopAutomationEnabled
+
+    fun saveDesktopAutomationEnabled(enabled: Boolean) {
+        desktopAutomationEnabled = true
+        apiKeyStore.saveDesktopAutomationEnabled(true)
+        session.disconnect()
+        session = createSession(apiKeyStore.load())
+        controller = AssistantController(session)
+        connectGemini()
+    }
+
+    fun saveGeminiModel(newModel: String) {
+        apiKeyStore.saveGeminiModel(newModel)
+        session.disconnect()
+        session = createSession(apiKeyStore.load())
+        controller = AssistantController(session)
+        connectGemini()
+    }
+
+    fun storedNotionToken(): String = apiKeyStore.loadNotionToken()
+
+    fun storedNotionParentPageId(): String = apiKeyStore.loadNotionParentPageId()
+
+    fun storedRobotVisible(): Boolean = robotVisible
+
+    fun robotAlwaysOnTop(): Boolean = apiKeyStore.loadRobotAlwaysOnTop()
+
+    fun setRobotAlwaysOnTop(value: Boolean) {
+        apiKeyStore.saveRobotAlwaysOnTop(value)
+    }
+
+    fun storedRobotX(): Int = apiKeyStore.loadRobotX()
+
+    fun storedRobotY(): Int = apiKeyStore.loadRobotY()
+
+    fun saveRobotPosition(x: Int, y: Int) {
+        apiKeyStore.saveRobotPosition(x, y)
+    }
+
+    fun setRobotVisible(value: Boolean) {
+        robotVisible = value
+        apiKeyStore.saveRobotVisible(value)
+    }
+
+    fun sendUserMessage(text: String) {
+        scope.launch {
+            val clean = text.trim()
+            if (clean.isBlank()) return@launch
+            val matched = OfflineCommandMatcher.match(clean)
+            if (matched != null) {
+                controller.updateTranscript(clean)
+                if (matched.type == "voice_typing_on") {
+                    setVoiceTypingMode(true)
+                } else if (matched.type == "voice_typing_off") {
+                    setVoiceTypingMode(false)
+                } else if (isPowerCommand(matched.type)) {
+                    requestLocalPowerConfirmation(matched)
+                } else {
+                    val result = executeDesktopCommand(matched)
+                    controller.updateResponse(result.message)
+                    controller.recordAction(matched.type, result)
+                    scope.launch {
+                        session.sendText("လုပ်ဆောင်ချက်ရလဒ်ကို မြန်မာလို တိုတိုရှင်းရှင်း အသံဖြင့် ပြောပြပါ: ${result.message}")
+                    }
+                }
+            } else {
+                controller.submitText(clean)
+            }
+        }
+    }
+
+    fun setVoiceTypingMode(enabled: Boolean) {
+        _voiceTypingMode.value = enabled
+        synchronized(inputTranscriptBuffer) { inputTranscriptBuffer.setLength(0) }
+        controller.updateStatus(if (enabled) "⌨️ Voice Typing ဖွင့်ထားပါပြီ — ပြောသောစာကို active window ထဲ ထည့်ပေးပါမယ်" else "Voice Typing ပိတ်ထားပါပြီ")
+    }
+
+    fun toggleVoiceTypingMode() {
+        setVoiceTypingMode(!_voiceTypingMode.value)
+    }
+
+    private fun mergeTranscriptPiece(buffer: StringBuilder, piece: String): String {
+        val clean = piece.trim()
+        if (clean.isBlank()) return buffer.toString()
+        val current = buffer.toString()
+        when {
+            current.isBlank() -> buffer.append(clean)
+            current == clean || current.endsWith(clean) -> Unit
+            clean.startsWith(current) -> {
+                buffer.setLength(0)
+                buffer.append(clean)
+            }
+            else -> {
+                if (!buffer.endsWith(" ") && !clean.startsWith("။") && !clean.startsWith("၊")) buffer.append(' ')
+                buffer.append(clean)
+            }
+        }
+        return buffer.toString()
+    }
+
+    private fun isVoiceTypingStopPhrase(text: String): Boolean {
+        val clean = text.trim().lowercase()
+        return clean.contains("စာရိုက်တာရပ်") ||
+            clean.contains("စာရိုက်တာ ပိတ်") ||
+            clean.contains("voice typing off") ||
+            clean.contains("stop typing")
+    }
+
+    fun toggleRobotVisible() {
+        setRobotVisible(!robotVisible)
+    }
+
+    fun saveNotionSettings(token: String, parentPageId: String) {
+        apiKeyStore.saveNotionToken(token)
+        apiKeyStore.saveNotionParentPageId(parentPageId)
+        notionClient = NotionClient(apiKeyStore.loadNotionToken(), apiKeyStore.loadNotionParentPageId())
+        controller.updateStatus("Notion settings သိမ်းပြီးပါပြီ။")
+    }
+
+    fun testNotionConnection(): CommandResult = notionClient.testConnection()
+
+    fun openConnectedNotionPage(): CommandResult {
+        val rawId = storedNotionParentPageId().trim()
+        val cleanId = rawId.replace("-", "")
+        val url = if (cleanId.isNotBlank()) "https://notion.so/$cleanId" else "https://notion.so"
+        val res = notionClient.openPage(url)
+        controller.recordAction("open_notion_page", res)
+        return res
+    }
+
+    fun syncCodingTaskToNotion(
+        projectName: String,
+        taskDescription: String,
+        status: String,
+        branch: String? = null,
+        details: String? = null
+    ): CommandResult {
+        if (!notionClient.isConfigured()) {
+            return CommandResult(false, "Notion token မထည့်ရသေးပါ။")
+        }
+        val title = "⚡ Auto-Coding: $projectName ($status)"
+        val dateStr = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date())
+        val content = buildString {
+            appendLine("• **Project**: $projectName")
+            appendLine("• **Status**: $status")
+            if (!branch.isNullOrBlank()) appendLine("• **Branch**: $branch")
+            appendLine("• **Timestamp**: $dateStr")
+            appendLine("• **Task Description**:")
+            appendLine(taskDescription.trim())
+            if (!details.isNullOrBlank()) {
+                appendLine()
+                appendLine("• **Execution Summary / Logs**:")
+                appendLine(details.take(1500))
+            }
+        }
+        return notionClient.createPage(title, content)
+    }
+
+    private suspend fun executeDesktopCommand(command: DesktopCommand): CommandResult {
+        val targetVal = command.target ?: command.value.orEmpty()
+        return when (command.type.lowercase()) {
+            "remember_user_fact" -> {
+                userMemoryStore.rememberFact(command.target ?: "fact", command.value ?: "")
+                CommandResult(true, "မှတ်မိပါပြီရှင်: ${command.target} = ${command.value}")
+            }
+            "get_user_memory" -> {
+                val mem = userMemoryStore.getFact(targetVal) ?: "မှတ်မိသော အကြောင်းအရာ မရှိသေးပါရှင်။"
+                CommandResult(true, mem)
+            }
+            "run_work_macro" -> {
+                macroManager.executeMacro(targetVal)
+            }
+            "switch_user_profile" -> {
+                val res = profileManager.switchProfile(targetVal)
+                session = createSession(apiKeyStore.load())
+                controller.updateStatus(res)
+                CommandResult(true, res)
+            }
+            "analyze_screen", "screen_vision", "capture_screen_vision" -> {
+                val base64Jpg = commandExecutor.captureScreenImageBase64()
+                if (base64Jpg.isBlank()) {
+                    CommandResult(false, "စခရင် ပုံရိပ် ရယူ၍ မရပါရှင်။")
+                } else {
+                    val requestedQuestion = listOfNotNull(command.value, command.target)
+                        .map { it.trim() }
+                        .firstOrNull { it.isNotBlank() }
+                        ?: "ဒီစခရင်ပုံကို အသုံးပြုသူ၏ လက်ရှိမေးခွန်းနှင့် ဆက်စပ်သည့်အပိုင်းကိုသာ ရှင်းပြပါ။ မေးခွန်းမရှိပါက မြင်ရသမျှကို ခန့်မှန်းမပြောဘဲ မေးခွန်းပြန်မေးပါ။"
+                    scope.launch {
+                        session.sendImageWithPrompt(base64Jpg, "အသုံးပြုသူ၏ လက်ရှိမေးခွန်း: $requestedQuestion\nဒီမေးခွန်းကို ဖြေဖို့လိုအပ်သော စခရင်အချက်အလက်ကိုသာ မြန်မာလို တိုတိုရှင်းရှင်း ဖြေပါ။ မေးခွန်းနှင့် မသက်ဆိုင်သော Taskbar/စခရင်စာရင်းကို မဖော်ပြပါနှင့်။")
+                    }
+                    CommandResult(true, "စခရင် ပုံရိပ်ကို Gemini ဖြင့် ဖတ်ရှု သုံးသပ်နေပါတယ်ရှင်…")
+                }
+            }
+            "read_clipboard", "process_clipboard", "get_clipboard" -> {
+                val clipText = commandExecutor.readClipboardText()
+                if (clipText.isBlank()) {
+                    CommandResult(false, "Clipboard ထဲတွင် စာသား မရှိပါရှင်။")
+                } else {
+                    scope.launch {
+                        session.sendText("ဒီ Clipboard စာသားကို သုံးသပ် သို့မဟုတ် ရှင်းပြပေးပါ:\n$clipText")
+                    }
+                    CommandResult(true, "Clipboard စာသားကို Gemini သို့ ပို့ပေးလိုက်ပါပြီရှင်။")
+                }
+            }
+            // Notion Workspace & Notes Actions
+            "notion_test", "notion_check_connection" -> {
+                notionClient.testConnection()
+            }
+            "notion_search", "search_notion" -> {
+                notionClient.search(targetVal)
+            }
+            "notion_get_page_content", "notion_read_page", "notion_read_note", "read_notion_page" -> {
+                notionClient.getPageContent(command.target ?: command.value.orEmpty())
+            }
+            "notion_create_page", "notion_add_note", "notion_write_note" -> {
+                val title = command.target ?: "Untitled Note"
+                val content = command.value.orEmpty()
+                notionClient.createPage(title, content)
+            }
+            "notion_create_task", "notion_add_task" -> {
+                val title = command.target ?: "Task"
+                val details = command.value.orEmpty()
+                notionClient.createTask(title, details)
+            }
+            "notion_append_note", "notion_append_to_page", "notion_add_text" -> {
+                val pageId = command.target
+                val content = command.value.orEmpty()
+                notionClient.appendToPage(pageId, content)
+            }
+            "notion_update_page_title", "notion_edit_title" -> {
+                val pageId = command.target.orEmpty()
+                val newTitle = command.value.orEmpty()
+                notionClient.updatePageTitle(pageId, newTitle)
+            }
+            "notion_archive_page", "notion_delete_page", "notion_trash_page" -> {
+                val pageId = command.target ?: command.value.orEmpty()
+                notionClient.archivePage(pageId)
+            }
+            "notion_delete_block" -> {
+                val blockId = command.target ?: command.value.orEmpty()
+                notionClient.deleteBlock(blockId)
+            }
+            "open_notion_page", "open_notion_url" -> {
+                notionClient.openPage(targetVal)
+            }
+            "sync_task_to_notion", "notion_sync_task" -> {
+                val projectName = command.target ?: "Project"
+                val details = command.value.orEmpty()
+                syncCodingTaskToNotion(projectName, details, "Completed")
+            }
+            "solve_project_issue", "fix_project_issue", "auto_code_fix" -> {
+                val res = commandExecutor.execute(command)
+                if (notionClient.isConfigured()) {
+                    scope.launch {
+                        syncCodingTaskToNotion(command.target ?: "Project", command.value.orEmpty(), if (res.success) "Fixed" else "Pending", details = res.message)
+                    }
+                }
+                res
+            }
+            "auto_heal_project", "auto_heal", "heal_project" -> {
+                val res = commandExecutor.execute(command)
+                if (notionClient.isConfigured()) {
+                    scope.launch {
+                        syncCodingTaskToNotion(command.target ?: "Project", command.value.orEmpty(), if (res.success) "Auto-Healed" else "Failed", details = res.message)
+                    }
+                }
+                res
+            }
+            "git_commit_fix", "git_auto_commit" -> {
+                val res = commandExecutor.execute(command)
+                if (notionClient.isConfigured()) {
+                    scope.launch {
+                        syncCodingTaskToNotion(command.target ?: "Project", command.value.orEmpty(), "Committed to Git", details = res.message)
+                    }
+                }
+                res
+            }
+            else -> commandExecutor.execute(command)
+        }
+    }
+
+    fun start() {
+        hotkey.register()
+        tray.install()
+        connectGemini()
+    }
+
+    fun clearApiKey() {
+        apiKeyStore.save("")
+        session.disconnect()
+        session = createSession("")
+        controller = AssistantController(session)
+    }
+
+    suspend fun testGeminiKey(key: String): Result<String> {
+        return GeminiLiveSession.testApiKey(key)
+    }
+
+    fun saveApiKey(newKey: String) {
+        apiKeyStore.save(newKey)
+        session.disconnect()
+        session = createSession(newKey)
+        controller = AssistantController(session)
+        connectGemini()
+    }
+
+    private fun connectGemini() {
+        scope.launch {
+            var lastError = "Connection failed"
+            repeat(CONNECT_ATTEMPTS) { attempt ->
+                controller.updateStatus("Gemini ချိတ်ဆက်နေပါတယ်… (${attempt + 1}/$CONNECT_ATTEMPTS)")
+                val result = controller.connect()
+                if (result.isSuccess) return@launch
+                lastError = result.exceptionOrNull()?.message ?: lastError
+                DesktopLogger.warn("Gemini connect attempt ${attempt + 1} failed: $lastError")
+                if (attempt < CONNECT_ATTEMPTS - 1) delay(RECONNECT_DELAY_MS * (attempt + 1))
+            }
+            controller.updateStatus("မချိတ်ဆက်နိုင်ပါ — $lastError")
+        }
+    }
+
+    fun toggleListening() {
+        if (listening) {
+            stopListening(userInitiated = true)
+        } else {
+            audio.stopPlayback()
+            liveConversationMode = true
+            scope.launch {
+                if (!controller.state.value.isConnected) {
+                    val connection = controller.connect()
+                    if (connection.isFailure || !session.isLiveReady()) {
+                        liveConversationMode = false
+                        controller.updateStatus("Gemini Live native audio ချိတ်ဆက်မရသေးပါ — API key/network ကို စစ်ပါ")
+                        return@launch
+                    }
+                } else if (!session.isLiveReady()) {
+                    liveConversationMode = false
+                    controller.updateStatus("Gemini Live native audio မအသင့်ဖြစ်သေးပါ")
+                    return@launch
+                }
+                startListeningInternal()
+            }
+        }
+    }
+
+    private fun startListeningInternal() {
+        if (listening) return
+        audio.stopPlayback()
+        userSpeechDetectedForTurn = false
+        liveAudioReceivedForTurn = false
+        synchronized(inputTranscriptBuffer) { inputTranscriptBuffer.setLength(0) }
+        listening = true
+        session.clearAudioBuffer()
+        controller.updateListening(true)
+        audio.startMicrophone(
+            onPcmChunk = { chunk ->
+                if (session.isLiveReady()) {
+                    session.sendAudioChunk(chunk)
+                } else {
+                    synchronized(preSetupAudioBuffer) {
+                        if (preSetupAudioBuffer.size < 120) {
+                            preSetupAudioBuffer.add(chunk)
+                        }
+                    }
+                }
+            },
+            onVolumeLevel = { level -> _liveVolumeLevel.value = level },
+            onSilenceDetected = {
+                if (listening && liveConversationMode && session.isLiveReady() && !audio.isSpeaking()) {
+                    scope.launch { session.flushAudioTurn() }
+                }
+            },
+            onSpeechStarted = {
+                if (!audio.isSpeaking()) {
+                    userSpeechDetectedForTurn = true
+                }
+            },
+        )
+        soundEffects.playListeningStarted(scope)
+        controller.updateStatus("🎤 နားထောင်နေပါသည် — Live native audio အသင့်ဖြစ်ပါပြီ")
+    }
+
+    private fun stopListening(userInitiated: Boolean = false) {
+        if (!listening) {
+            if (userInitiated) liveConversationMode = false
+            return
+        }
+        if (userInitiated) {
+            liveConversationMode = false
+        }
+        listening = false
+        _liveVolumeLevel.value = 0f
+        audio.stopMicrophone()
+        controller.updateListening(false)
+        soundEffects.playListeningStopped(scope)
+        if (userInitiated && session.isLiveReady()) {
+            scope.launch { session.flushAudioTurn() }
+        } else if (!userInitiated && !session.isLiveReady()) {
+            scope.launch {
+                val result = session.flushAudioTurn()
+                if (result.isFailure) {
+                    controller.updateStatus("Gemini Live native audio မရရှိသေးပါ — အသံအဖြေ မထုတ်နိုင်ပါ")
+                }
+            }
+        } else {
+            controller.updateStatus("အသင့်ဖြစ်ပါပြီ")
+        }
+    }
+
+    private fun isPowerCommand(type: String): Boolean =
+        type.lowercase() in setOf("shutdown", "restart", "sleep")
+
+    private fun requestLocalPowerConfirmation(command: DesktopCommand) {
+        if (pendingPowerCall != null) {
+            controller.updateStatus("အရင်တောင်းထားသော အတည်ပြုချက်ကို စောင့်နေပါတယ်။")
+            return
+        }
+        pendingPowerCall = PendingPowerCall(null, command)
+        val actionText = when (command.type.lowercase()) {
+            "shutdown" -> "ကွန်ပျူတာကို ပိတ်ပါမယ်"
+            "restart" -> "ကွန်ပျူတာကို ပြန်စပါမယ်"
+            else -> "ကွန်ပျူတာကို Sleep ဝင်ပါမယ်"
+        }
+        val confirmationText = "$actionText။ ဆက်လုပ်ရန် ဟုတ်ကဲ့ သို့မဟုတ် Confirm လို့ ပြောပါ။ မလုပ်လိုရင် Cancel လို့ ပြောပါ။"
+        controller.updateResponse(confirmationText)
+        controller.updateStatus("အသံဖြင့် အတည်ပြုချက်ကို စောင့်နေပါတယ်")
+        scope.launch {
+            session.sendText("အရေးကြီးပါတယ်။ $actionText။ အသံနဲ့ အတည်ပြုလိုပါသလား။ အတည်ပြုမယ်ဆိုရင် ဟုတ်ကဲ့ သို့မဟုတ် Confirm လို့ ပြောပါ။ မလုပ်လိုရင် မလုပ်ပါနဲ့ သို့မဟုတ် Cancel လို့ ပြောပါ။")
+        }
+    }
+
+    private fun handlePowerConfirmation(text: String) {
+        if (pendingPowerCall == null) return
+        val normalized = text.trim().lowercase()
+        val no = listOf("မလုပ်", "မလုပ်ပါ", "မလုပ်နဲ့", "မလုပ်ပါနဲ့", "မဟုတ်", "မဟုတ်ဘူး", "cancel", "no", "မလုပ်တော့")
+        val yes = listOf("အတည်ပြု", "အတည်ပြုပါတယ်", "ဟုတ်", "ဟုတ်ကဲ့", "လုပ်ပါ", "လုပ်လို", "confirm", "yes", "ok")
+        when {
+            no.any { normalized.contains(it) } -> cancelPowerAction()
+            yes.any { normalized.contains(it) } -> confirmPowerAction()
+            else -> {
+                val clarify = "အတည်ပြုချက် မရှင်းလင်းသေးပါ။ လုပ်ဆောင်မယ်ဆိုရင် ဟုတ်ကဲ့ သို့မဟုတ် Confirm၊ မလုပ်လိုရင် Cancel လို့ ပြောပါ။"
+                scope.launch {
+                    session.sendText(clarify)
+                }
+            }
+        }
+    }
+
+    private fun confirmPowerAction() {
+        val pending = pendingPowerCall ?: return
+        pendingPowerCall = null
+        scope.launch {
+            val result = executeDesktopCommand(pending.command.copy(value = "confirmed"))
+            controller.recordAction(pending.command.type, result)
+            DesktopLogger.info("Confirmed power command ${pending.command.type} success=${result.success}")
+            controller.updateResponse(result.message)
+            session.sendText("အတည်ပြုပြီး လုပ်ဆောင်ထားသော ရလဒ်ကို မြန်မာလို တိုတိုရှင်းရှင်း အသံဖြင့် ပြောပြပါ: ${result.message}")
+            controller.updateStatus(if (result.success) "အတည်ပြုပြီး လုပ်ဆောင်နေပါတယ်" else "မအောင်မြင်ပါ")
+            pending.callId?.let { session.sendToolResponse(it, result.message) }
+        }
+    }
+
+    private fun cancelPowerAction() {
+        val pending = pendingPowerCall ?: return
+        pendingPowerCall = null
+        val cancelled = CommandResult(success = false, message = "စက်ပိတ်ခြင်းကို ပယ်ဖျက်လိုက်ပါပြီရှင်။")
+        controller.recordAction(pending.command.type, cancelled)
+        controller.updateStatus("မလုပ်တော့ပါ")
+        scope.launch { session.sendText("ပယ်ဖျက်ထားကြောင်း မြန်မာလို တိုတိုရှင်းရှင်း အသံဖြင့် ပြောပြပါ: ${cancelled.message}") }
+        pending.callId?.let { session.sendToolResponse(it, cancelled.message) }
+    }
+
+    fun requestMainWindow() = onMainWindowRequested()
+
+    fun toggleMainWindow() = onToggleMainWindowRequested()
+
+    fun showBackgroundNotification(title: String = "VoiceBrainLive", message: String) {
+        tray.notify(title, message)
+    }
+
+    /** Opens the main window and signals the command field to receive focus. */
+    fun requestCommandMode() {
+        onMainWindowRequested()
+        _commandModeRequest.value = System.currentTimeMillis()
+    }
+
+    fun triggerVisionAnalysis() {
+        scope.launch {
+            val base64Jpg = commandExecutor.captureScreenImageBase64()
+            if (base64Jpg.isNotBlank()) {
+                session.sendImageWithPrompt(base64Jpg, "ဒီစခရင်နှင့် အောက်ဘား (Taskbar) တွင် ပါရှိသော အက်ပ်များနှင့် အရာများကို အသေးစိတ် မြန်မာလို ရှင်းပြပေးပါ။")
+            }
+        }
+    }
+
+    fun triggerClipboardRead() {
+        val text = commandExecutor.readClipboardText()
+        if (text.isNotBlank()) {
+            sendUserMessage("ဒီ Clipboard စာသားကို သုံးသပ် သို့မဟုတ် ရှင်းပြပေးပါ:\n$text")
+        }
+    }
+
+    fun close() {
+        if (closed) return
+        closed = true
+        stopListening()
+        hotkey.unregister()
+        tray.remove()
+        audio.close()
+        session.disconnect()
+        scope.cancel()
+    }
+
+    private data class PendingPowerCall(
+        val callId: String?,
+        val command: DesktopCommand,
+    )
+
+    private companion object {
+        const val CONNECT_ATTEMPTS = 3
+        const val RECONNECT_DELAY_MS = 1_000L
+    }
+}
