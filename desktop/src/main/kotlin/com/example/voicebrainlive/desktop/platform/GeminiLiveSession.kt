@@ -61,9 +61,11 @@ class GeminiLiveSession(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val client = OkHttpClient.Builder()
         .protocols(listOf(okhttp3.Protocol.HTTP_1_1))
-        .pingInterval(15, TimeUnit.SECONDS)
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
+        // Give the Live server enough time to complete setup and avoid
+        // false ping failures during a slow native-audio handshake.
+        .pingInterval(30, TimeUnit.SECONDS)
+        .connectTimeout(20, TimeUnit.SECONDS)
+        .readTimeout(0, TimeUnit.MILLISECONDS)
         .writeTimeout(15, TimeUnit.SECONDS)
         .build()
 
@@ -152,7 +154,7 @@ class GeminiLiveSession(
             }
         })
 
-        val ready = withTimeoutOrNull(12_000L) { setupSignal.await() } != null
+        val ready = withTimeoutOrNull(20_000L) { setupSignal.await() } != null
         if (!ready) {
             webSocket?.cancel()
             webSocket = null
@@ -238,11 +240,10 @@ class GeminiLiveSession(
         if (ws != null && setupCompleteReceived) {
             val realtimeInput = JSONObject().apply {
                 put("realtimeInput", JSONObject().apply {
-                    put("mediaChunks", JSONArray().apply {
-                        put(JSONObject().apply {
-                            put("mimeType", "audio/pcm;rate=16000")
-                            put("data", base64Pcm)
-                        })
+                    // Current Gemini Live API field. mediaChunks[] is deprecated.
+                    put("audio", JSONObject().apply {
+                        put("mimeType", "audio/pcm;rate=16000")
+                        put("data", base64Pcm)
                     })
                 })
             }
