@@ -132,6 +132,25 @@ class ApiKeyStore {
         flush()
     }
 
+    /**
+     * Phase 2 — barge-in sensitivity for the client VAD ("low"|"normal"|"high",
+     * default "normal"). Read once at audio-engine construction; voice command
+     * `set_barge_in_sensitivity` also applies it live via
+     * WindowsAudioEngine.updateBargeInSensitivity.
+     */
+    fun loadBargeInSensitivity(): String {
+        val stored = preferences.get(KEY_BARGE_IN_SENSITIVITY, "normal")
+        return com.example.voicebrainlive.desktop.platform.audio.SpectralVad.normalizeLevel(stored)
+    }
+
+    fun saveBargeInSensitivity(level: String) {
+        preferences.put(
+            KEY_BARGE_IN_SENSITIVITY,
+            com.example.voicebrainlive.desktop.platform.audio.SpectralVad.normalizeLevel(level),
+        )
+        flush()
+    }
+
     fun loadRobotAlwaysOnTop(): Boolean = preferences.getBoolean(KEY_ROBOT_ALWAYS_ON_TOP, true)
 
     fun saveRobotAlwaysOnTop(value: Boolean) {
@@ -204,6 +223,7 @@ class ApiKeyStore {
         private const val KEY_ROBOT_X = "robot_x"
         private const val KEY_ROBOT_Y = "robot_y"
         private const val KEY_ECHO_CANCELLER = "audio_echo_canceller"
+        private const val KEY_BARGE_IN_SENSITIVITY = "audio_barge_in_sensitivity"
     }
 }
 

@@ -50,6 +50,12 @@ class GeminiLiveSession(
     private val onToolCall: (callId: String, commandType: String, target: String?, value: String?) -> Unit = { _, _, _, _ -> },
     private val onStatus: (String) -> Unit = {},
     private val onExecuteToolDirect: (suspend (commandType: String, target: String?, value: String?) -> String)? = null,
+    /**
+     * Phase 2 — server audio arriving within this window after a client-side
+     * barge-in belongs to the interrupted generation and is dropped instead
+     * of being played over the user. Exposed for unit tests.
+     */
+    private val interruptedTailDropMs: Long = 900L,
 ) : VoiceSession {
 
     private val normalizedModel = modelName.trim().removePrefix("models").removePrefix("/").let {
@@ -90,6 +96,72 @@ class GeminiLiveSession(
     private val sentAudioChunks = java.util.concurrent.atomic.AtomicLong(0)
     private val failedAudioSends = java.util.concurrent.atomic.AtomicLong(0)
     private val receivedAudioChunks = java.util.concurrent.atomic.AtomicLong(0)
+
+    // ---- Phase 2: client-side interruption protocol ----
+    //
+    // In automatic-VAD mode (our setup: realtimeInputConfig.automaticActivityDetection
+    // is enabled), the Live API does NOT accept realtimeInput.activityStart /
+    // activityEnd from the client — those fields are only valid when server-side
+    // activity detection is disabled. So the client deliberately sends NO
+    // interruption message: the forwarded barge-in audio itself (onset frame
+    // first, never clipped) is the interruption signal. The server's VAD hears
+    // the user, stops generating, and confirms with serverContent.interrupted.
+    //
+    // What the client CAN do: local playback is already stopped instantly by
+    // WindowsAudioEngine, but a few audio chunks of the interrupted turn are
+    // still in flight from the server. Playing them would talk over the user,
+    // so they are dropped (see shouldSuppressServerAudio) until the server
+    // confirms the interruption or the drop window expires.
+    @Volatile private var clientBargeInAtNanos = 0L
+    private val clientBargeInCount = java.util.concurrent.atomic.AtomicLong(0)
+    private val droppedInterruptedTailChunks = java.util.concurrent.atomic.AtomicLong(0)
+    @Volatile private var lastUserTurnEndNanos = 0L
+
+    /**
+     * Called by DesktopRuntime when client VAD confirms the user interrupted
+     * assistant playback (barge-in). Local playback is already stopped; this
+     * marks the turn so the interrupted generation's in-flight audio tail is
+     * dropped rather than played over the user.
+     */
+    fun notifyClientBargeIn() {
+        clientBargeInAtNanos = System.nanoTime()
+        val n = clientBargeInCount.incrementAndGet()
+        if (n == 1L || n % 25L == 0L) {
+            // Telemetry: counts only, never transcript content.
+            DesktopLogger.info("Turn-taking telemetry: client barge-in #$n (awaiting server interrupted=true)")
+        }
+    }
+
+    /**
+     * Client VAD speech-end marker: turn-timing telemetry only. In
+     * automatic-VAD mode the server derives end-of-turn from its own VAD
+     * (silenceDurationMs); the client must NOT send audioStreamEnd here —
+     * that signal means "mic turned off" and the mic stays open.
+     */
+    fun noteUserTurnEnd() {
+        lastUserTurnEndNanos = System.nanoTime()
+    }
+
+    /**
+     * True when an incoming server audio chunk should be discarded because it
+     * belongs to the generation the user just interrupted. Chunks arriving
+     * after the drop window are the new turn's audio and play normally; the
+     * marker is also cleared when the server confirms via interrupted=true.
+     */
+    fun shouldSuppressServerAudio(): Boolean {
+        val bargeInAt = clientBargeInAtNanos
+        if (bargeInAt == 0L) return false
+        val elapsedMs = (System.nanoTime() - bargeInAt) / 1_000_000
+        if (elapsedMs > interruptedTailDropMs) {
+            clientBargeInAtNanos = 0L // window expired — new-turn audio plays
+            return false
+        }
+        val dropped = droppedInterruptedTailChunks.incrementAndGet()
+        if (dropped == 1L || dropped % 50L == 0L) {
+            DesktopLogger.info("Turn-taking telemetry: dropped $dropped interrupted-turn audio tail chunk(s)")
+        }
+        return true
+    }
 
     private val restFallbackModels = listOf(
         "gemini-3-flash-preview",
@@ -921,6 +993,9 @@ class GeminiLiveSession(
             val serverContent = json.getJSONObject("serverContent")
             if (serverContent.optBoolean("interrupted", false)) {
                 synchronized(liveTurnText) { liveTurnText.setLength(0) }
+                // Server confirmed the interruption: stop dropping audio —
+                // anything arriving now belongs to the new turn.
+                clientBargeInAtNanos = 0L
                 onInterrupted()
             }
 

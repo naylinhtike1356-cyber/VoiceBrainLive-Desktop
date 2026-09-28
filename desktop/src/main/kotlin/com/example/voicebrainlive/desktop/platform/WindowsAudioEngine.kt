@@ -23,6 +23,27 @@ private const val RENDER_REF_KEEP_BYTES = 12_000 // ~250ms of 24kHz render audio
 private const val RENDER_REF_FRAME_BYTES_24K = 1_536 // 32ms @ 24kHz — resamples to a 1024-byte 16kHz frame
 
 /**
+ * Phase 2 — TURN-TAKING TIMING (why each value is what it is).
+ *
+ * - Client VAD hangover (SpectralVad, 300 ms): marks the *local* end of user
+ *   speech. Only drives UI/telemetry hooks (onUserSpeechEnd) and the
+ *   audioStreamEnd flush below — it never cuts audio.
+ * - Server end-of-speech (GeminiLiveSession setup realtimeInputConfig,
+ *   silenceDurationMs = 700 ms): when the *model* decides the user finished
+ *   and starts responding. Deliberately longer than the client hangover so a
+ *   natural mid-sentence pause (300–700 ms) does not trigger a premature
+ *   reply, while the client still marks the boundary early for telemetry.
+ * - onSilenceDetected → session.flushAudioTurn() sends realtimeInput
+ *   audioStreamEnd: valid only in automatic-VAD mode; tells the server the
+ *   mic stream paused so it flushes cached audio. The stream reopens on the
+ *   next audio chunk — the mic itself is never turned off mid-conversation.
+ * - Barge-in confirmation (SuppressionEchoCanceller, 2 frames ≈ 64 ms):
+ *   kept short on purpose — interruption latency is the most noticeable
+ *   part of "natural" conversation. The 2-frame gate (not 1) rejects
+ *   single-frame VAD flicker from noise.
+ */
+
+/**
  * Phase 1 — Full-duplex-ready audio orchestrator.
  *
  * Owns the conversation audio state machine; the physical I/O lives in
@@ -46,10 +67,15 @@ class WindowsAudioEngine(
     private val onAudioError: ((String) -> Unit)? = null,
     /**
      * Phase-2 turn-taking hooks, fired on VAD speech transitions.
-     * Currently informational (logged by DesktopRuntime); the server-side
-     * interruption protocol lands in Phase 2.
+     *
+     * [onUserSpeechStart] receives true when the onset was a *barge-in*
+     * (user speech confirmed while the assistant was playing — local
+     * playback is already stopped at that point) and false for an ordinary
+     * turn start. Callers must use the flag rather than polling
+     * [isSpeaking], which is already false by the time a barge-in hook
+     * fires (stopPlayback clears the echo-cooldown timestamp).
      */
-    private val onUserSpeechStart: (() -> Unit)? = null,
+    private val onUserSpeechStart: ((bargeIn: Boolean) -> Unit)? = null,
     private val onUserSpeechEnd: (() -> Unit)? = null,
     captureFactory: ((AudioLatencyTracker) -> AudioCapture)? = null,
     rendererFactory: ((AudioLatencyTracker) -> AudioRenderer)? = null,
@@ -172,11 +198,11 @@ class WindowsAudioEngine(
             }
         }
 
-        fun handleSpeechOnset() {
+        fun handleSpeechOnset(bargeIn: Boolean) {
             if (!isUserSpeaking) {
                 isUserSpeaking = true
                 onSpeechStarted()
-                onUserSpeechStart?.invoke()
+                onUserSpeechStart?.invoke(bargeIn)
                 // Flush pre-roll so the initial syllable is preserved.
                 flushPreRoll()
             }
@@ -216,13 +242,13 @@ class WindowsAudioEngine(
                     // is not clipped.
                     DesktopLogger.info("Audio telemetry: User barge-in detected, stopping playback")
                     stopPlayback()
-                    handleSpeechOnset()
+                    handleSpeechOnset(bargeIn = true)
                     decision.firstFrame?.let { forwardChunk(it) }
                     forwardChunk(decision.frame)
                 }
                 is EchoDecision.Forward -> {
                     if (speech) {
-                        handleSpeechOnset()
+                        handleSpeechOnset(bargeIn = false)
                         forwardChunk(decision.frame)
                     } else {
                         handleSpeechEnd()
@@ -363,6 +389,17 @@ class WindowsAudioEngine(
 
     fun isSpeaking(): Boolean =
         renderer.isPlaying || (System.currentTimeMillis() - lastPlaybackTime < ECHO_COOLDOWN_MS)
+
+    /**
+     * Phase 2 — applies a new barge-in sensitivity level (low|normal|high)
+     * immediately, without restarting capture. No-op unless the active VAD
+     * is a [SpectralVad] (the default).
+     */
+    fun updateBargeInSensitivity(level: String) {
+        val normalized = SpectralVad.normalizeLevel(level)
+        (vad as? SpectralVad)?.setSensitivity(SpectralVad.sensitivityForLevel(normalized))
+        DesktopLogger.info("Audio engine: barge-in sensitivity set to $normalized")
+    }
 
     /** Human-readable diagnostics: canceller kind + per-stage p50/p95. */
     fun getAudioLatencyReport(): String =

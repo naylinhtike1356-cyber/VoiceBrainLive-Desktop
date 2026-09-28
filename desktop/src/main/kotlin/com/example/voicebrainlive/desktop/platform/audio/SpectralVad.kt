@@ -22,8 +22,8 @@ import kotlin.math.sqrt
  * per-frame feature inspection while tuning.
  */
 class SpectralVad(
-    /** 0..1 — higher = more sensitive (lower energy margin). */
-    private val sensitivity: Float = 0.5f,
+    /** 0..1 — higher = more sensitive (lower energy margin). Mutable via [setSensitivity]. */
+    private var sensitivity: Float = 0.5f,
     private val hangoverMs: Long = 300L,
     private val onsetWindowMs: Long = 400L,
     /** Injectable clock (ms) — defaults to wall time; tests advance it per frame. */
@@ -36,6 +36,27 @@ class SpectralVad(
         private const val MAX_ZCR = 0.45f
         private const val NOISE_ADAPT_RATE = 0.02f
         private const val FLUX_ADAPT_RATE = 0.02f
+
+        /**
+         * Phase 2 — user-facing barge-in sensitivity levels ("low"/"normal"/"high",
+         * persisted as `audio.bargeInSensitivity`) mapped onto the 0..1 VAD
+         * sensitivity scale. "normal" (0.5) preserves the long-standing default
+         * behavior exactly; "high" lowers the energy gate by ~2 dB for easier
+         * interruptions in noisy rooms; "low" raises it by ~2 dB so background
+         * chatter is less likely to cut the assistant off.
+         */
+        fun sensitivityForLevel(level: String): Float = when (normalizeLevel(level)) {
+            "low" -> 0.25f
+            "high" -> 0.75f
+            else -> 0.5f
+        }
+
+        /** Normalizes a stored/spoken level to low|normal|high (default normal). */
+        fun normalizeLevel(value: String?): String = when (value?.trim()?.lowercase()) {
+            "low", "နိမ့်", "လျော့" -> "low"
+            "high", "မြင့်", "တိုး" -> "high"
+            else -> "normal"
+        }
     }
 
     private var prevMagnitude: FloatArray? = null
@@ -46,6 +67,15 @@ class SpectralVad(
     private var speechActive = false
 
     private val energyMarginDb: Float get() = 14f - 8f * sensitivity.coerceIn(0f, 1f)
+
+    /**
+     * Phase 2 — live sensitivity update (voice command / settings). Takes
+     * effect on the very next frame; the adaptive noise floor is untouched
+     * so no re-convergence glitch occurs.
+     */
+    fun setSensitivity(value: Float) {
+        sensitivity = value.coerceIn(0f, 1f)
+    }
 
     override fun isSpeech(frame: ByteArray): Boolean {
         val now = clock()

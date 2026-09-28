@@ -154,12 +154,16 @@ class DesktopRuntime(
                 controller.updateStatus("အသံစနစ် အခက်အခဲ: $message")
             },
             // Phase-2 turn-taking hooks: client-side VAD speech transitions.
-            // Logged for now; the server interruption protocol lands in Phase 2.
-            onUserSpeechStart = {
-                DesktopLogger.info("Turn-taking hook: user speech started (Phase 2 will signal server interruption)")
+            // bargeIn=true means the user interrupted assistant playback —
+            // local playback is already stopped; the session drops the
+            // interrupted turn's in-flight audio tail. Ordinary turn starts
+            // need no signal: the server's own VAD owns turn-taking in
+            // automatic-VAD mode (activityStart is not valid there).
+            onUserSpeechStart = { bargeIn ->
+                if (bargeIn) session.notifyClientBargeIn()
             },
             onUserSpeechEnd = {
-                DesktopLogger.info("Turn-taking hook: user speech ended (Phase 2 will handle turn commit)")
+                session.noteUserTurnEnd()
             },
             echoCancellerFactory = { isPlaying ->
                 com.example.voicebrainlive.desktop.platform.audio.EchoCancellerFactory.create(
@@ -168,6 +172,13 @@ class DesktopRuntime(
                     onFallback = { message -> DesktopLogger.warn(message) },
                 )
             },
+            // Phase 2 — barge-in sensitivity from settings (default "normal"
+            // preserves the long-standing VAD behavior exactly).
+            vad = com.example.voicebrainlive.desktop.platform.audio.SpectralVad(
+                sensitivity = com.example.voicebrainlive.desktop.platform.audio.SpectralVad.sensitivityForLevel(
+                    apiKeyStore.loadBargeInSensitivity(),
+                ),
+            ),
         )
         if (key.isNotBlank()) {
             scope.launch {
@@ -242,7 +253,11 @@ class DesktopRuntime(
             },
             onAudioResponse = { payload ->
                 liveAudioReceivedForTurn = true
-                audio.playPcmBase64(payload)
+                // Phase 2: drop the interrupted turn's in-flight audio tail
+                // instead of playing it over the user who just barged in.
+                if (!session.shouldSuppressServerAudio()) {
+                    audio.playPcmBase64(payload)
+                }
             },
             onTurnComplete = {
                 val inputTranscript = synchronized(inputTranscriptBuffer) {
@@ -393,8 +408,8 @@ class DesktopRuntime(
                     setVoiceTypingMode(true)
                 } else if (matched.type == "voice_typing_off") {
                     setVoiceTypingMode(false)
-                } else if (isPowerCommand(matched.type)) {
-                    requestLocalPowerConfirmation(matched)
+                } else if (isConfirmationGatedCommand(matched.type)) {
+                    requestLocalConfirmation(matched)
                 } else {
                     val result = executeDesktopCommand(matched)
                     controller.updateResponse(result.message)
@@ -535,6 +550,21 @@ class DesktopRuntime(
             }
             "latency_report", "audio_latency" -> {
                 CommandResult(true, audio.getAudioLatencyReport())
+            }
+            "set_barge_in_sensitivity" -> {
+                // Phase 2 — voice command: persists the level and applies it
+                // to the running VAD immediately (no restart needed).
+                val level = com.example.voicebrainlive.desktop.platform.audio.SpectralVad.normalizeLevel(
+                    command.value ?: command.target,
+                )
+                apiKeyStore.saveBargeInSensitivity(level)
+                audio.updateBargeInSensitivity(level)
+                val levelText = when (level) {
+                    "low" -> "နိမ့်"
+                    "high" -> "မြင့်"
+                    else -> "ပုံမှန်"
+                }
+                CommandResult(true, "ဖြတ်ပြောမှု ထိခိုက်လွယ်တာ (barge-in sensitivity) ကို ‘$levelText’ သတ်မှတ်လိုက်ပါပြီရှင်။")
             }
             else -> commandExecutor.execute(command)
         }
@@ -738,10 +768,16 @@ class DesktopRuntime(
         }
     }
 
-    private fun isPowerCommand(type: String): Boolean =
-        type.lowercase() in setOf("shutdown", "restart", "sleep")
+    /**
+     * Phase 2 — destructive actions gated behind voice confirmation in the
+     * offline path: power actions plus recycle-bin deletion and forced app
+     * termination. (In the Live tool-call path the same gate is enforced via
+     * CommandResult.requiresConfirmation from the executor.)
+     */
+    private fun isConfirmationGatedCommand(type: String): Boolean =
+        type.lowercase() in setOf("shutdown", "restart", "sleep", "empty_recycle_bin", "close_app", "stop_app")
 
-    private fun requestLocalPowerConfirmation(command: DesktopCommand) {
+    private fun requestLocalConfirmation(command: DesktopCommand) {
         synchronized(pendingPowerCallLock) {
             if (pendingPowerCall != null) {
                 controller.updateStatus("အရင်တောင်းထားသော အတည်ပြုချက်ကို စောင့်နေပါတယ်။")
@@ -752,7 +788,9 @@ class DesktopRuntime(
         val actionText = when (command.type.lowercase()) {
             "shutdown" -> "ကွန်ပျူတာကို ပိတ်ပါမယ်"
             "restart" -> "ကွန်ပျူတာကို ပြန်စပါမယ်"
-            else -> "ကွန်ပျူတာကို Sleep ဝင်ပါမယ်"
+            "sleep" -> "ကွန်ပျူတာကို Sleep ဝင်ပါမယ်"
+            "empty_recycle_bin" -> "Recycle Bin ထဲက အရာအားလုံးကို အပြီးတိုင် ဖျက်ပါမယ်"
+            else -> "‘${command.target ?: command.value.orEmpty()}’ app ကို အတင်းပိတ်ပါမယ် (မသိမ်းရသေးသော အလုပ်များ ဆုံးရှုံးနိုင်ပါသည်)"
         }
         val confirmationText = "$actionText။ ဆက်လုပ်ရန် ဟုတ်ကဲ့ သို့မဟုတ် Confirm လို့ ပြောပါ။ မလုပ်လိုရင် Cancel လို့ ပြောပါ။"
         controller.updateResponse(confirmationText)
@@ -786,7 +824,13 @@ class DesktopRuntime(
             p
         } ?: return
         scope.launch {
-            val result = executeDesktopCommand(pending.command.copy(value = "confirmed"))
+            // Stamp the confirmation marker, keeping the action's name in
+            // target so the executor never mistakes "confirmed" for it.
+            val confirmedCommand = pending.command.copy(
+                target = pending.command.target ?: pending.command.value,
+                value = "confirmed",
+            )
+            val result = executeDesktopCommand(confirmedCommand)
             controller.recordAction(pending.command.type, result)
             DesktopLogger.info("Confirmed power command ${pending.command.type} success=${result.success}")
             controller.updateResponse(result.message)
