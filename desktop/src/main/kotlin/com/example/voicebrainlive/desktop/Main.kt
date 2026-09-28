@@ -1,9 +1,8 @@
 package com.example.voicebrainlive.desktop
 
-@file:OptIn(androidx.compose.animation.ExperimentalAnimationApi::class)
-
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.ExperimentalAnimationApi
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateDpAsState
@@ -221,6 +220,7 @@ fun main() {
 }
 }
 
+@OptIn(ExperimentalAnimationApi::class)
 @Composable
 private fun VoiceBrainDesktopApp(
     runtime: DesktopRuntime,

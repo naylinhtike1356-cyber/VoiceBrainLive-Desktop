@@ -285,7 +285,7 @@ fun AssistantOrb(
                 }
                 AssistantPhase.ERROR -> {
                     // 900ms pulse with jitter.
-                    val jitter = sin(errPhase * Math.PI * 2f * 7f) * 2.dp.toPx()
+                    val jitter = (sin(errPhase * Math.PI * 2f * 7f) * 2.dp.toPx()).toFloat()
                     drawCircle(
                         color = c.copy(alpha = 0.75f),
                         radius = r * (0.62f + 0.18f * errPhase) + jitter,
