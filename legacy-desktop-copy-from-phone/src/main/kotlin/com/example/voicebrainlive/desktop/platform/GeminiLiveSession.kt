@@ -1,0 +1,262 @@
+package com.example.voicebrainlive.desktop.platform
+
+import com.example.voicebrainlive.desktop.core.VoiceSession
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
+import okio.ByteString
+import org.json.JSONArray
+import org.json.JSONObject
+import java.util.concurrent.TimeUnit
+
+class GeminiLiveSession(
+    private val apiKey: String,
+    private val model: String = "models/gemini-3.1-flash-live-preview",
+    private val voice: String = "Aoede",
+    private val systemInstruction: String = """
+        You are VoiceBrainLive Desktop, a helpful Burmese-speaking Windows computer assistant.
+        Reply naturally in Burmese unless the user asks for another language. Help the user learn Windows and operate the laptop.
+        You may call execute_desktop_command only for safe laptop actions: open_app, close_app, search_web, search_files, find_file, open_file, open_url, open_folder, open_downloads, open_documents, open_desktop, open_recycle_bin, open_settings, open_network_settings, open_bluetooth_settings, open_display_settings, open_sound_settings, take_screenshot, volume_up, volume_down, mute, lock_computer, shutdown, restart, sleep, and system_status, notion_test, notion_search, notion_create_page, notion_add_note, notion_create_task, notion_append_note, and open_notion_page.
+        For close_app, repeat the app name and ask for confirmation if the request is ambiguous. Never attempt phone calls, SMS, contacts, Android services, Health Connect, phone-only commands, deleting files, or reading private file contents. For Notion, search shared pages and create notes only when the user explicitly asks. Search only approved user folders and return file paths; open a file only when the user explicitly asks.
+        If the user asks how to do something on Windows, explain it step by step in Burmese. Do not claim an action succeeded until the tool response confirms it.
+    """.trimIndent(),
+    private val onInputTranscript: (String) -> Unit = {},
+    private val onOutputTranscript: (String) -> Unit = {},
+    private val onAudioResponse: (String) -> Unit = {},
+    private val onToolCall: (callId: String, commandType: String, target: String?, value: String?) -> Unit = { _, _, _, _ -> },
+    private val onStatus: (String) -> Unit = {},
+) : VoiceSession {
+    private val client = OkHttpClient.Builder()
+        .pingInterval(15, TimeUnit.SECONDS)
+        .readTimeout(0, TimeUnit.MILLISECONDS)
+        .build()
+
+    private var socket: WebSocket? = null
+    private var setupComplete = false
+    private var connectWaiter: CompletableDeferred<Result<Unit>>? = null
+
+    private val wsUrl = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=$apiKey"
+
+    override suspend fun connect(): Result<Unit> = withContext(Dispatchers.IO) {
+        if (apiKey.isBlank()) return@withContext Result.failure(IllegalStateException("GEMINI_API_KEY is not configured"))
+        if (socket != null && setupComplete) return@withContext Result.success(Unit)
+
+        val waiter = CompletableDeferred<Result<Unit>>()
+        connectWaiter = waiter
+        val request = Request.Builder().url(wsUrl).build()
+        socket = client.newWebSocket(request, listener)
+        runCatching {
+            withTimeout(CONNECT_TIMEOUT_MS) { waiter.await() }
+        }.getOrElse { error ->
+            socket?.cancel()
+            socket = null
+            setupComplete = false
+            connectWaiter = null
+            onStatus("Gemini ချိတ်ဆက်ချိန်ကုန်သွားပါတယ်။ Internet နဲ့ API key ကို စစ်ပါ။")
+            Result.failure(error)
+        }
+    }
+
+    override suspend fun sendText(text: String): Result<Unit> = withContext(Dispatchers.IO) {
+        if (!setupComplete) return@withContext Result.failure(IllegalStateException("Gemini session is not connected"))
+        val message = JSONObject().put(
+            "realtimeInput",
+            JSONObject().put("text", text),
+        )
+        if (socket?.send(message.toString()) == true) Result.success(Unit)
+        else Result.failure(IllegalStateException("Gemini WebSocket is closed"))
+    }
+
+    fun sendAudioChunk(base64Pcm: String): Boolean {
+        if (!setupComplete) return false
+        val message = JSONObject().put(
+            "realtimeInput",
+            JSONObject().put(
+                "audio",
+                JSONObject()
+                    .put("data", base64Pcm)
+                    .put("mimeType", "audio/pcm;rate=16000"),
+            ),
+        )
+        return socket?.send(message.toString()) == true
+    }
+
+    fun stopAudioTurn() {
+        socket?.send(JSONObject().put("realtimeInput", JSONObject().put("audioStreamEnd", true)).toString())
+    }
+
+    override fun disconnect() {
+        setupComplete = false
+        connectWaiter = null
+        socket?.close(1000, "User disconnected")
+        socket = null
+    }
+
+    private val listener = object : WebSocketListener() {
+        override fun onOpen(webSocket: WebSocket, response: Response) {
+            onStatus("WebSocket connected; configuring…")
+            val setup = JSONObject().put(
+                "setup",
+                JSONObject()
+                    .put("model", model)
+                    .put("generationConfig", JSONObject().put("responseModalities", JSONArray().put("AUDIO")))
+                    .put("systemInstruction", JSONObject().put(
+                        "parts", JSONArray().put(JSONObject().put("text", systemInstruction)),
+                    ))
+                    .put("speechConfig", JSONObject().put(
+                        "voiceConfig", JSONObject().put(
+                            "prebuiltVoiceConfig", JSONObject().put("voiceName", voice),
+                        ),
+                    ))
+                    .put("inputAudioTranscription", JSONObject())
+                    .put("outputAudioTranscription", JSONObject())
+                    .put("tools", desktopTools()),
+            )
+            webSocket.send(setup.toString())
+        }
+
+        override fun onMessage(webSocket: WebSocket, text: String) {
+            handleMessage(text)
+        }
+
+        override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+            handleMessage(bytes.utf8())
+        }
+
+        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+            setupComplete = false
+            val httpDetail = response?.let { "HTTP ${it.code} ${it.message}" }
+            val detail = t.message?.takeIf { it.isNotBlank() } ?: httpDetail ?: "connection failed"
+            onStatus("Gemini error: $detail — API key, model, and internet ကို စစ်ပါ")
+            connectWaiter?.complete(Result.failure(t))
+            connectWaiter = null
+        }
+
+        override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+            setupComplete = false
+            connectWaiter?.complete(Result.failure(IllegalStateException("WebSocket closed: $code $reason")))
+            connectWaiter = null
+            onStatus("Gemini socket closed ($code): ${reason.ifBlank { "connection closed" }} — စာပို့လျှင် အလိုအလျောက် reconnect လုပ်ပါမယ်")
+        }
+    }
+
+    private fun handleMessage(raw: String) {
+        val message = runCatching { JSONObject(raw) }.getOrNull() ?: return
+
+        message.optJSONObject("error")?.let { errorObject ->
+            val code = errorObject.optInt("code", 0)
+            val status = errorObject.optString("status")
+            val detail = errorObject.optString("message").ifBlank { "Gemini rejected the session setup" }
+            val diagnostic = listOf("code=$code", status, detail).filter { it.isNotBlank() }.joinToString("; ")
+            setupComplete = false
+            val failure = IllegalStateException("Gemini Live setup failed: $diagnostic")
+            connectWaiter?.complete(Result.failure(failure))
+            connectWaiter = null
+            onStatus("Gemini setup failed: $detail")
+            return
+        }
+
+        if (message.has("setupComplete")) {
+            setupComplete = true
+            onStatus("Connected")
+            connectWaiter?.complete(Result.success(Unit))
+            connectWaiter = null
+            return
+        }
+
+        message.optJSONObject("toolCall")?.let { toolCall ->
+            val calls = toolCall.optJSONArray("functionCalls") ?: return@let
+            for (index in 0 until calls.length()) {
+                val call = calls.optJSONObject(index) ?: continue
+                val args = call.optJSONObject("args")
+                onToolCall(
+                    call.optString("id"),
+                    args?.optString("command_type")?.takeIf { it.isNotBlank() } ?: call.optString("name"),
+                    args?.optString("target")?.takeIf { it.isNotBlank() },
+                    args?.optString("value")?.takeIf { it.isNotBlank() },
+                )
+            }
+            return
+        }
+
+        val content = message.optJSONObject("serverContent") ?: return
+        content.optJSONObject("inputTranscription")?.optString("text")?.takeIf { it.isNotBlank() }?.let(onInputTranscript)
+        content.optJSONObject("outputTranscription")?.optString("text")?.takeIf { it.isNotBlank() }?.let(onOutputTranscript)
+
+        val parts = content.optJSONObject("modelTurn")?.optJSONArray("parts") ?: return
+        for (index in 0 until parts.length()) {
+            val inlineData = parts.optJSONObject(index)?.optJSONObject("inlineData") ?: continue
+            if (inlineData.optString("mimeType").startsWith("audio/pcm")) {
+                inlineData.optString("data").takeIf { it.isNotBlank() }?.let(onAudioResponse)
+            }
+        }
+    }
+
+    fun sendToolResponse(callId: String, result: String) {
+        if (callId.isBlank()) return
+        val response = JSONObject().put(
+            "toolResponse",
+            JSONObject().put(
+                "functionResponses",
+                JSONArray().put(
+                    JSONObject()
+                        .put("id", callId)
+                        .put("name", "execute_desktop_command")
+                        .put("response", JSONObject().put("result", result)),
+                ),
+            ),
+        )
+        socket?.send(response.toString())
+    }
+
+    companion object {
+        private const val CONNECT_TIMEOUT_MS = 15_000L
+
+        suspend fun testApiKey(apiKey: String): Result<String> = withContext(Dispatchers.IO) {
+            val cleanKey = apiKey.trim()
+            if (cleanKey.isBlank()) return@withContext Result.failure(IllegalArgumentException("Gemini API key မထည့်ရသေးပါ"))
+            runCatching {
+                val httpClient = OkHttpClient.Builder().callTimeout(15, TimeUnit.SECONDS).build()
+                val encodedKey = java.net.URLEncoder.encode(cleanKey, Charsets.UTF_8)
+                val request = Request.Builder()
+                    .url("https://generativelanguage.googleapis.com/v1beta/models?key=$encodedKey")
+                    .get()
+                    .build()
+                httpClient.newCall(request).execute().use { response ->
+                    val body = response.body?.string().orEmpty()
+                    if (!response.isSuccessful) {
+                        val detail = JSONObject(body).optJSONObject("error")?.optString("message")
+                            ?.takeIf { it.isNotBlank() } ?: "HTTP ${response.code}"
+                        error("Gemini API key မအလုပ်လုပ်ပါ: $detail")
+                    }
+                    "Gemini API key အလုပ်လုပ်ပါတယ်။ API access အောင်မြင်ပါပြီ။"
+                }
+            }.fold(
+                onSuccess = { Result.success(it) },
+                onFailure = { Result.failure(it) },
+            )
+        }
+    }
+
+    private fun desktopTools(): JSONArray {
+        val properties = JSONObject()
+            .put("command_type", JSONObject().put("type", "STRING").put("description", "Windows command: open_app, close_app, search_web, search_files, find_file, open_file, open_url, open_folder, open_downloads, open_documents, open_desktop, open_recycle_bin, open_settings, open_network_settings, open_bluetooth_settings, open_display_settings, open_sound_settings, take_screenshot, volume_up, volume_down, mute, lock_computer, shutdown, restart, sleep, system_status, refresh_file_index, notion_test, notion_search, notion_create_page, notion_add_note, notion_create_task, notion_append_note, open_notion_page"))
+            .put("target", JSONObject().put("type", "STRING").put("description", "App name, file name/query, Notion query/title/content, safe user-folder path, URL, folder, or search query"))
+            .put("value", JSONObject().put("type", "STRING").put("description", "Optional secondary value"))
+        val schema = JSONObject()
+            .put("type", "OBJECT")
+            .put("properties", properties)
+            .put("required", JSONArray().put("command_type"))
+        val declaration = JSONObject()
+            .put("name", "execute_desktop_command")
+            .put("description", "Execute a safe Windows desktop action for the user. Never use this for phone calls or SMS.")
+            .put("parameters", schema)
+        return JSONArray().put(JSONObject().put("functionDeclarations", JSONArray().put(declaration)))
+    }
+}

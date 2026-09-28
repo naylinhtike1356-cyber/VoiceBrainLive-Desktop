@@ -15,7 +15,18 @@ import com.example.voicebrainlive.desktop.platform.NotionClient
 import com.example.voicebrainlive.desktop.core.UserMemoryStore
 import com.example.voicebrainlive.desktop.core.ProfileManager
 import com.example.voicebrainlive.desktop.core.MacroManager
+import com.example.voicebrainlive.desktop.core.VoiceRoutineEngine
 import com.example.voicebrainlive.desktop.core.OfflineCommandMatcher
+import com.example.voicebrainlive.desktop.core.AutonomousGoalEngine
+import com.example.voicebrainlive.desktop.core.CompoundCommandHandler
+import com.example.voicebrainlive.desktop.core.PlanDecomposer
+import com.example.voicebrainlive.desktop.core.GoalDefinition
+import com.example.voicebrainlive.desktop.core.GoalStep
+import com.example.voicebrainlive.desktop.core.HybridOfflineFallbackEngine
+import com.example.voicebrainlive.desktop.core.AssistantPhase
+import com.example.voicebrainlive.desktop.platform.HealthWatchdog
+import com.example.voicebrainlive.desktop.platform.LowPowerOptimizer
+import com.example.voicebrainlive.desktop.platform.PowerMode
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -44,10 +55,42 @@ class DesktopRuntime(
     private val apiKeyStore = ApiKeyStore()
     val userMemoryStore = UserMemoryStore()
     val profileManager = ProfileManager()
+    val routineEngine = VoiceRoutineEngine(commandExecutor)
     val macroManager = MacroManager(commandExecutor)
+    val offlineEngine = HybridOfflineFallbackEngine(commandExecutor)
+    val powerOptimizer = LowPowerOptimizer(
+        onThrottleStateChanged = { mode ->
+            if (mode == PowerMode.THROTTLED_IDLE && !listening) {
+                audio.stopMicrophone()
+            }
+        }
+    )
+    val watchdog = HealthWatchdog(
+        isOnlineProvider = { session.isLiveReady() },
+        onAutoReconnect = {
+            if (!reconnectInProgress && apiKeyStore.load().isNotBlank()) {
+                scope.launch { connectGemini() }
+            }
+        },
+        onSafeStateReset = { msg ->
+            controller.updateStatus(msg)
+            controller.updatePhase(AssistantPhase.READY)
+        }
+    )
+    private val _showNeuralBrainRequest = MutableStateFlow(0L)
+    val showNeuralBrainRequest: StateFlow<Long> = _showNeuralBrainRequest.asStateFlow()
+
+    fun triggerNeuralBrainView() {
+        _showNeuralBrainRequest.value = System.currentTimeMillis()
+        onMainWindowRequested()
+    }
+    val compoundCommandHandler = CompoundCommandHandler(commandExecutor)
+    val planDecomposer = PlanDecomposer(compoundCommandHandler)
+    val goalEngine = AutonomousGoalEngine(commandExecutor, planDecomposer)
     private var notionClient = NotionClient(apiKeyStore.loadNotionToken(), apiKeyStore.loadNotionParentPageId())
     private var listening = false
     private var liveConversationMode = false
+    @Volatile private var reconnectInProgress = false
     private var pendingPowerCall: PendingPowerCall? = null
     private var robotVisible = apiKeyStore.loadRobotVisible()
     // Tool availability is no longer controlled by the old Settings toggle.
@@ -90,6 +133,11 @@ class DesktopRuntime(
         val key = apiKeyStore.load()
         session = createSession(key)
         controller = AssistantController(session)
+        scope.launch {
+            goalEngine.activeGoal.collect { goal: GoalDefinition? ->
+                controller.updateActiveGoal(goal)
+            }
+        }
         audio = WindowsAudioEngine(
             onSpeakingStateChanged = { isSpeaking ->
                 controller.updateSpeaking(isSpeaking)
@@ -100,6 +148,9 @@ class DesktopRuntime(
                 } else {
                     controller.updateStatus("အသင့်ဖြစ်ပါပြီ")
                 }
+            },
+            onAudioError = { message ->
+                controller.updateStatus("အသံစနစ် အခက်အခဲ: $message")
             }
         )
         if (key.isNotBlank()) {
@@ -115,22 +166,34 @@ class DesktopRuntime(
             System.getenv("GEMINI_API_KEY") ?: System.getProperty("GEMINI_API_KEY", "")
         }
         val memoryContext = userMemoryStore.toSystemInstructionContext()
+        val activeWindowContext = commandExecutor.getActiveWindowContext().toPromptContext()
         val activeProfile = profileManager.getActiveProfile()
         val dynamicInstructions = """
-            You are VoiceBrainLive Desktop, an elite, friendly, warm, polite, and helpful Burmese-speaking Windows computer assistant and tech expert (နည်းပညာကျွမ်းကျင်သူ ကွန်ပျူတာ ပါတနာ) for user profile '$activeProfile'.
+            You are Nilar AI (နီလာ AI), an elite, friendly, warm, polite, and helpful Burmese-speaking Windows computer assistant and tech expert (နည်းပညာကျွမ်းကျင်သူ ကွန်ပျူတာ ပါတနာ) for user profile '$activeProfile'.
             
             LANGUAGE, PERSONALITY & SPOKEN CONVERSATION (မြန်မာစကားပြောနှင့် သွက်လက်စွာ ဆွေးနွေးခြင်း):
             - အသုံးပြုသူ မေးမြန်းသည်များ၊ ခိုင်းစေသည်များကို အမြဲတမ်း သဘာဝကျပြီး သွက်လက်ယဉ်ကျေးသော မြန်မာစကားပြောဖြင့် ရှင်းလင်းပြတ်သားစွာ အသံထွက် ဖြေကြားပေးပါ။
-            - စကားပြောရာတွင် လိုရင်းတိုရှင်း၊ သဘာဝကျကျ၊ လူသားတစ်ယောက်လို နွေးထွေးဖော်ရွေစွာ ဖြေကြားပါ။
+            - အသုံးပြုသူက ရှင်းလင်းစွာ မမေးဘဲ သို့မဟုတ် မခိုင်းဘဲနှင့် မလိုအပ်သော စကားများ လျှောက်ပြောခြင်း၊ မေးခွန်းများ လျှောက်မေးနေခြင်း လုံးဝ မပြုလုပ်ပါနှင့်။
+            - အသုံးပြုသူနှင့် အပေးအယူ နားလည်မှု အပြည့်ရှိစွာဖြင့် လိုရင်းတိုရှင်း၊ သဘာဝကျကျ၊ တိကျပြတ်သားစွာ ဆောင်ရွက်ပြီး တုံ့ပြန်ပါ။
+            - စကားရှည်ကြီးများ မပြောပါနှင့်။ အသုံးပြုသူ မခိုင်းပါက တိတ်ဆိတ်စွာ စောင့်ဆိုင်းပါ။
             - "I am an AI assistant" သို့မဟုတ် "<no speech detected>" စသည့် စကားလုံး/tags များကို ဘယ်သောအခါမှ ထုတ်မပြောပါနှင့်။
-            - အသုံးပြုသူ၏ လက်ရှိမေးခွန်း/ပြောဆိုချက်ကို အဓိကထား၍ အကြောင်းအရာနှင့် ကိုက်ညီသော အဖြေကို သဘာဝကျကျ အသစ်စဉ်းစား ဖြေကြားပါ။
+            - အသုံးပြုသူ၏ လက်ရှိမေးခွန်း/ပြောဆိုချက်ကို အဓိကထား၍ အကြောင်းအရာနှင့် ကိုက်ညီသော အဖြေကို သဘာဝကျကျ ဖြေကြားပါ။
+            - အသုံးပြုသူ၏ အသံကို မြန်မာဘာသာစကားအဖြစ် ဦးစားပေးနားထောင်ပါ။ မြန်မာစကားဖြစ်နိုင်လျှင် English သို့မဟုတ် Spanish စကားလုံးအဖြစ် မခန့်မှန်းပါနှင့်။ မသေချာပါက command မလုပ်ဘဲ တိုတောင်းစွာ ပြန်မေးပါ။
+            
+            ACTIVE FOREGROUND APP CONTEXT (မျက်မှောက် ကွန်ပျူတာ အခြေအနေ):
+            $activeWindowContext
+            
             $memoryContext
             
             WINDOWS AUTOMATION, TECH EXPERT & NOTION INTEGRATION:
             - You may call execute_desktop_command for Windows actions and Notion workspace management:
             - open_app, close_app, search_web, search_youtube, search_files, find_file, open_file, open_url, open_folder, open_downloads, open_documents, open_desktop, open_recycle_bin, empty_recycle_bin, get_current_time, get_current_date, open_settings, open_network_settings, open_bluetooth_settings, open_display_settings, open_sound_settings, take_screenshot, volume_up, volume_down, mute, lock_computer, shutdown, restart, sleep, system_status, get_system_info, diagnose_network, get_battery_status, list_running_apps, copy_to_clipboard, run_powershell_safe, refresh_file_index, get_active_window, solve_project_issue, auto_heal_project, launch_coding_agent, run_android_build_test, verify_app_on_emulator, git_commit_fix, check_adb_devices.
             - Notion Integration: notion_test, notion_search, notion_get_page_content, notion_create_page, notion_add_note, notion_create_task, notion_append_note, notion_append_to_page, notion_update_page_title, notion_archive_page, notion_delete_page, notion_delete_block, open_notion_page.
-            - Agentic memory & context: get_active_window, remember_user_fact, get_user_memory, run_work_macro, switch_user_profile, analyze_screen, read_clipboard, media_play_pause, media_next, media_prev, minimize_all, maximize_window, minimize_window, close_window, close_tab, brightness_up, brightness_down.
+            - Agentic memory & routines: get_active_window, remember_user_fact, get_user_memory, run_voice_routine, run_work_macro, show_neural_brain, switch_user_profile, analyze_screen, read_clipboard, media_play_pause, media_next, media_prev, minimize_all, maximize_window, minimize_window, close_window, close_tab, brightness_up, brightness_down.
+            - Autonomous Goal Execution & Multi-Step Workflows (ပန်းတိုင်ရောက်သည်အထိ တဆင့်ချင်း ဆောင်ရွက်ခြင်း):
+              * execute_goal: When user asks to achieve an objective that requires multiple sequential steps (e.g., "ဖုန်းကို wireless ချိတ်ပြီး build စစ်ပေးပါ", "auto-heal project", "workspace ပြင်ပေးပါ"), call execute_goal with target = user intention / goal name, value = optional project name.
+              * chain_commands: When user gives multiple sequential actions in one sentence (e.g., "A ဖွင့်ပြီး B စစ်ပေးပါ"), call chain_commands with target = raw sentence or command list.
+              * cancel_goal: When user says stop/cancel ongoing goal execution.
             - When user commands an action, execute the appropriate tool IMMEDIATELY and reply concisely with the action outcome in Burmese audio.
             - When asked technical, programming, Android, or IT questions, give clear, direct, step-by-step explanations in Burmese.
         """.trimIndent()
@@ -174,6 +237,11 @@ class DesktopRuntime(
                     val result = commandExecutor.typeTextIntoActiveWindow(inputTranscript)
                     controller.updateResponse(result.message)
                     controller.updateStatus(if (result.success) "⌨️ စာသားကို ထည့်ပြီးပါပြီ" else result.message)
+                } else if (inputTranscript.isNotBlank()) {
+                    val sensitiveFacts = userMemoryStore.learnFromConversation(inputTranscript)
+                    if (sensitiveFacts.isNotEmpty()) {
+                        controller.updateStatus("⚠️ လျှို့ဝှက်အချက်အလက် (${sensitiveFacts.first().title}) အတွက် အတည်ပြုချက် လိုအပ်ပါသည်")
+                    }
                 }
                 liveAudioReceivedForTurn = false
                 userSpeechDetectedForTurn = false
@@ -223,6 +291,7 @@ class DesktopRuntime(
             onStatus = {
                 DesktopLogger.info("Gemini status: $it")
                 controller.updateStatus(it)
+                if (isLiveFailureStatus(it)) scheduleLiveReconnect()
             },
             onExecuteToolDirect = { cmd, target, value ->
                 val res = executeDesktopCommand(DesktopCommand(cmd, target, value))
@@ -284,6 +353,19 @@ class DesktopRuntime(
         scope.launch {
             val clean = text.trim()
             if (clean.isBlank()) return@launch
+            val sensitivePending = userMemoryStore.learnFromConversation(clean)
+            if (sensitivePending.isNotEmpty()) {
+                controller.updateStatus("⚠️ လျှို့ဝှက်အချက်အလက် (${sensitivePending.first().title}) အတွက် အတည်ပြုချက် လိုအပ်ပါသည်")
+            }
+            powerOptimizer.onUserActivity()
+            if (!session.isLiveReady()) {
+                controller.updateTranscript(clean)
+                controller.updateStatus("📡 Offline Mode — အော့ဖ်လိုင်း ဆောင်ရွက်နေပါသည်…")
+                val res = offlineEngine.handleOfflineTurn(clean)
+                controller.updateResponse(res.message)
+                controller.recordAction("offline_command", res)
+                return@launch
+            }
             val matched = OfflineCommandMatcher.match(clean)
             if (matched != null) {
                 controller.updateTranscript(clean)
@@ -397,6 +479,31 @@ class DesktopRuntime(
     private suspend fun executeDesktopCommand(command: DesktopCommand): CommandResult {
         val targetVal = command.target ?: command.value.orEmpty()
         return when (command.type.lowercase()) {
+            "execute_goal", "run_goal" -> {
+                controller.updateStatus("ပန်းတိုင် အစီအစဉ် ချမှတ်နေပါတယ်…")
+                val result = goalEngine.executeGoalFromIntent(
+                    intent = targetVal,
+                    optionalProject = command.value,
+                    onStepMilestone = { stepIndex: Int, totalSteps: Int, step: GoalStep ->
+                        controller.updateStatus("အဆင့် $stepIndex/$totalSteps: ${step.title}")
+                    }
+                )
+                CommandResult(result.success, result.finalReport)
+            }
+            "chain_commands", "compound_command", "run_compound_command" -> {
+                controller.updateStatus("အဆင့်များကို ဆက်တိုက် ဆောင်ရွက်နေပါတယ်…")
+                val cmds = compoundCommandHandler.parseCommands(targetVal)
+                compoundCommandHandler.executeChainedCommands(
+                    commands = cmds,
+                    onStepProgress = { stepIdx: Int, total: Int, current: DesktopCommand, res: CommandResult ->
+                        controller.updateStatus("အဆင့် $stepIdx/$total ပြီးပါပြီ: ${current.type}")
+                    }
+                )
+            }
+            "cancel_goal", "stop_goal" -> {
+                goalEngine.cancelGoal()
+                CommandResult(true, "ပန်းတိုင် လုပ်ဆောင်ချက်ကို ရပ်တန့်လိုက်ပါပြီရှင်။")
+            }
             "remember_user_fact" -> {
                 userMemoryStore.rememberFact(command.target ?: "fact", command.value ?: "")
                 CommandResult(true, "မှတ်မိပါပြီရှင်: ${command.target} = ${command.value}")
@@ -405,8 +512,12 @@ class DesktopRuntime(
                 val mem = userMemoryStore.getFact(targetVal) ?: "မှတ်မိသော အကြောင်းအရာ မရှိသေးပါရှင်။"
                 CommandResult(true, mem)
             }
-            "run_work_macro" -> {
-                macroManager.executeMacro(targetVal)
+            "run_voice_routine", "voice_routine", "execute_routine", "run_work_macro" -> {
+                routineEngine.executeRoutine(targetVal)
+            }
+            "show_neural_brain", "view_neural_brain", "open_brain_view" -> {
+                triggerNeuralBrainView()
+                CommandResult(true, "Neural Brain Memory Matrix ကို ဖွင့်လှစ်ပြသပေးလိုက်ပါပြီရှင်။")
             }
             "switch_user_profile" -> {
                 val res = profileManager.switchProfile(targetVal)
@@ -513,14 +624,37 @@ class DesktopRuntime(
                 }
                 res
             }
+            "optimize_ram", "clean_ram", "trim_memory", "clear_ram" -> {
+                val reclaimed = powerOptimizer.trimMemoryWorkingSet()
+                CommandResult(true, "RAM Memory ကို ရှင်းလင်းပြီးပါပြီရှင် (Reclaimed: ~${reclaimed}MB)")
+            }
+            "health_check", "system_health_watchdog", "watchdog_status" -> {
+                val report = watchdog.getHealthReport(audio.isCaptureActive() || audio.isSpeaking())
+                CommandResult(true, report.toSummary())
+            }
             else -> commandExecutor.execute(command)
         }
     }
 
+    fun onWindowVisibilityChanged(visible: Boolean) {
+        powerOptimizer.onWindowVisibilityChanged(visible)
+    }
+
     fun start() {
+        watchdog.install()
         hotkey.register()
         tray.install()
         connectGemini()
+    }
+
+    fun cancelActiveGoal() {
+        goalEngine.cancelGoal()
+        controller.clearActiveGoal()
+    }
+
+    fun clearActiveGoal() {
+        goalEngine.clearActiveGoal()
+        controller.clearActiveGoal()
     }
 
     fun clearApiKey() {
@@ -557,6 +691,29 @@ class DesktopRuntime(
         }
     }
 
+    private fun isLiveFailureStatus(status: String): Boolean {
+        val normalized = status.lowercase()
+        return normalized.contains("timeout") ||
+            normalized.contains("disconnected") ||
+            normalized.contains("မအောင်မြင်") ||
+            normalized.contains("မအသင့်") ||
+            normalized.contains("မရနိုင်") ||
+            normalized.contains("ပြန်လည်ချိတ်ဆက်")
+    }
+
+    private fun scheduleLiveReconnect() {
+        if (closed || reconnectInProgress) return
+        reconnectInProgress = true
+        scope.launch {
+            try {
+                delay(1_500L)
+                if (!closed && !session.isLiveReady()) connectGemini()
+            } finally {
+                reconnectInProgress = false
+            }
+        }
+    }
+
     fun toggleListening() {
         if (listening) {
             stopListening(userInitiated = true)
@@ -564,7 +721,12 @@ class DesktopRuntime(
             audio.stopPlayback()
             liveConversationMode = true
             scope.launch {
-                if (!controller.state.value.isConnected) {
+                if (!controller.state.value.isConnected || !session.isLiveReady()) {
+                    // A stale controller flag must never allow microphone capture
+                    // to start against a dead or half-setup WebSocket.
+                    if (controller.state.value.isConnected && !session.isLiveReady()) {
+                        controller.disconnect()
+                    }
                     val connection = controller.connect()
                     if (connection.isFailure || !session.isLiveReady()) {
                         liveConversationMode = false
@@ -577,6 +739,9 @@ class DesktopRuntime(
                     return@launch
                 }
                 startListeningInternal()
+                // Direct-input mode: do not speak an automatic greeting here.
+                // The first microphone audio must belong to the user so the
+                // initial turn cannot be blocked by greeting playback/echo.
             }
         }
     }
@@ -590,7 +755,7 @@ class DesktopRuntime(
         listening = true
         session.clearAudioBuffer()
         controller.updateListening(true)
-        audio.startMicrophone(
+        val microphoneStarted = audio.startMicrophone(
             onPcmChunk = { chunk ->
                 if (session.isLiveReady()) {
                     session.sendAudioChunk(chunk)
@@ -604,16 +769,31 @@ class DesktopRuntime(
             },
             onVolumeLevel = { level -> _liveVolumeLevel.value = level },
             onSilenceDetected = {
-                if (listening && liveConversationMode && session.isLiveReady() && !audio.isSpeaking()) {
-                    scope.launch { session.flushAudioTurn() }
+                if (listening && liveConversationMode && session.isLiveReady()) {
+                    scope.launch {
+                        val result = session.flushAudioTurn()
+                        if (result.isFailure) {
+                            val message = result.exceptionOrNull()?.message ?: "unknown error"
+                            DesktopLogger.warn("Live audio turn flush failed: $message")
+                            controller.updateStatus("အသံအလှည့် ပို့မရသေးပါ — Live ချိတ်ဆက်မှုကို စစ်နေပါတယ်")
+                        }
+                    }
                 }
             },
             onSpeechStarted = {
-                if (!audio.isSpeaking()) {
-                    userSpeechDetectedForTurn = true
-                }
+                // This is only a local speech hint. In full-duplex mode the Live
+                // server owns activity detection and sends `interrupted` for
+                // genuine barge-in, which then stops playback in onInterrupted.
+                userSpeechDetectedForTurn = true
             },
         )
+        if (!microphoneStarted) {
+            listening = false
+            liveConversationMode = false
+            controller.updateListening(false)
+            controller.updateStatus("Microphone မဖွင့်နိုင်ပါ — Windows input device/permission ကို စစ်ပါ")
+            return
+        }
         soundEffects.playListeningStarted(scope)
         controller.updateStatus("🎤 နားထောင်နေပါသည် — Live native audio အသင့်ဖြစ်ပါပြီ")
     }

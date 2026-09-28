@@ -2,8 +2,10 @@ package com.example.voicebrainlive.desktop.platform
 
 import java.io.ByteArrayOutputStream
 import java.util.Base64
+import java.util.concurrent.ConcurrentLinkedDeque
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 import javax.sound.sampled.AudioFormat
 import javax.sound.sampled.AudioSystem
 import javax.sound.sampled.DataLine
@@ -14,13 +16,15 @@ private const val INPUT_SAMPLE_RATE = 16_000f
 private const val OUTPUT_SAMPLE_RATE = 24_000f
 private const val CHANNELS = 1
 private const val SAMPLE_SIZE_BITS = 16
-private const val JITTER_PREBUFFER_BYTES = 14_400 // ~300ms of 24kHz 16-bit mono audio
-private const val LINE_BUFFER_SIZE = 48_000 // ~1000ms hardware buffer for network jitter
-private const val CAPTURE_CHUNK_BYTES = 2048 // 64ms at 16kHz, mono, 16-bit
-private const val END_OF_TURN_SILENCE_MS = 800L
-private const val SPEECH_RMS_THRESHOLD = 0.018f
-private const val PLAYBACK_GAP_GRACE_MS = 1_500L
-private const val ECHO_COOLDOWN_MS = 350L // Grace period after playback to absorb room reverberations
+private const val JITTER_PREBUFFER_BYTES = 5_760 // ~120ms of 24kHz 16-bit mono audio (smooth anti-stutter buffer)
+private const val LINE_BUFFER_SIZE = 28_800 // ~600ms hardware buffer
+private const val CAPTURE_CHUNK_BYTES = 1024 // 32ms at 16kHz, mono, 16-bit
+private const val SPEECH_RMS_THRESHOLD = 0.016f // Sensitivity threshold to start speech burst
+private const val BARGE_IN_RMS_THRESHOLD = 0.080f // Distinct human voice volume to intentionally interrupt assistant
+private const val SPEECH_HANGOVER_MS = 750L // Keep streaming during natural pauses between words
+private const val PRE_ROLL_CHUNKS = 8 // Keep last ~256ms in memory so initial syllable is preserved
+private const val PLAYBACK_GAP_GRACE_MS = 900L // Prevent line underflow on network packet jitter
+private const val ECHO_COOLDOWN_MS = 400L // Grace period for room acoustic reverb to dissipate
 
 private fun inputPcmFormat() = AudioFormat(
     AudioFormat.Encoding.PCM_SIGNED,
@@ -42,20 +46,57 @@ private fun outputPcmFormat() = AudioFormat(
     false,
 )
 
+/**
+ * High-Fidelity Resilient Audio Engine:
+ * - Anti-stuttering pre-buffer and jitter management for smooth assistant speech.
+ * - Dynamic Audio Device Hot-Plugging: Auto-recovers input/output lines if headset/mic is unplugged,
+ *   Bluetooth device switches, or PC wakes from sleep.
+ * - Adaptive Dynamic Noise Floor: Automatically self-calibrates sensitivity for quiet vs noisy rooms.
+ * - Software AGC & Soft Limiter: Dynamically boosts quiet speech while preventing digital clipping.
+ * - Intelligent Silence Gate: Suppresses empty room noise from flooding Gemini Live,
+ *   while preserving pre-roll speech bursts.
+ * - Acoustic Echo Cancellation (AEC) Shield: Suppresses speaker echo from feeding into mic,
+ *   preventing echo feedback loops, self-interruption, and overlapping speech.
+ * - Reliable Barge-In: Detects deliberate user speech during assistant playback.
+ */
 class WindowsAudioEngine(
     private val onSpeakingStateChanged: ((Boolean) -> Unit)? = null,
+    private val onAudioError: ((String) -> Unit)? = null,
 ) {
     private var microphone: TargetDataLine? = null
     private var captureThread: Thread? = null
     private var speaker: SourceDataLine? = null
-    private val audioQueue = LinkedBlockingQueue<ByteArray>()
+    private val audioQueue = LinkedBlockingQueue<ByteArray>(200)
     private var playbackThread: Thread? = null
+    private val capturedChunks = AtomicLong(0)
+    private val queuedOutputChunks = AtomicLong(0)
 
     @Volatile private var isSpeaking = false
     @Volatile private var lastPlaybackTime = 0L
+    @Volatile private var isCaptureActive = false
+    fun isCaptureActive(): Boolean = isCaptureActive
+    @Volatile var smoothedAgcGain = 1.0f
+        internal set
+    @Volatile var estimatedNoiseFloor = 0.008f
+        internal set
 
     init {
         startPlaybackWorker()
+    }
+
+    private fun acquireTargetDataLine(format: AudioFormat): TargetDataLine? {
+        return runCatching {
+            (AudioSystem.getTargetDataLine(format)).also {
+                it.open(format)
+                it.start()
+            }
+        }.recoverCatching {
+            val info = DataLine.Info(TargetDataLine::class.java, format)
+            (AudioSystem.getLine(info) as TargetDataLine).also {
+                it.open(format)
+                it.start()
+            }
+        }.getOrNull()
     }
 
     @Synchronized
@@ -64,20 +105,19 @@ class WindowsAudioEngine(
         if (existing != null && existing.isOpen && existing.isRunning) {
             return existing
         }
-        return runCatching {
+        speaker = runCatching {
             (AudioSystem.getSourceDataLine(format)).also {
                 it.open(format, LINE_BUFFER_SIZE)
                 it.start()
-                speaker = it
             }
         }.recoverCatching {
             val info = DataLine.Info(SourceDataLine::class.java, format)
             (AudioSystem.getLine(info) as SourceDataLine).also {
                 it.open(format, LINE_BUFFER_SIZE)
                 it.start()
-                speaker = it
             }
         }.getOrNull()
+        return speaker
     }
 
     private fun startPlaybackWorker() {
@@ -97,9 +137,9 @@ class WindowsAudioEngine(
                     // Pre-buffer for smooth playback without stuttering
                     val preBuffer = ByteArrayOutputStream()
                     preBuffer.write(firstChunk)
-                    val preBufferDeadline = System.currentTimeMillis() + 200L
+                    val preBufferDeadline = System.currentTimeMillis() + 120L
                     while (preBuffer.size() < JITTER_PREBUFFER_BYTES && System.currentTimeMillis() < preBufferDeadline) {
-                        val next = audioQueue.poll(30, TimeUnit.MILLISECONDS)
+                        val next = audioQueue.poll(40, TimeUnit.MILLISECONDS)
                         if (next != null) {
                             preBuffer.write(next)
                         } else {
@@ -108,31 +148,51 @@ class WindowsAudioEngine(
                     }
 
                     setSpeakingState(true)
-                    val line = getOrCreateSpeaker(format)
+                    var line = getOrCreateSpeaker(format)
                     if (line != null) {
                         val initialBytes = preBuffer.toByteArray()
-                        line.write(initialBytes, 0, initialBytes.size)
+                        try {
+                            line.write(initialBytes, 0, initialBytes.size)
+                        } catch (e: Exception) {
+                            DesktopLogger.warn("Speaker write failed on preBuffer, re-acquiring line: ${e.message}")
+                            runCatching { speaker?.close() }
+                            speaker = null
+                            line = getOrCreateSpeaker(format)
+                            runCatching { line?.write(initialBytes, 0, initialBytes.size) }
+                        }
                         lastPlaybackTime = System.currentTimeMillis()
 
                         // Stream continuously without pausing
                         while (!Thread.currentThread().isInterrupted) {
                             val chunk = audioQueue.poll(PLAYBACK_GAP_GRACE_MS, TimeUnit.MILLISECONDS)
                             if (chunk != null) {
-                                line.write(chunk, 0, chunk.size)
+                                try {
+                                    line?.write(chunk, 0, chunk.size)
+                                } catch (e: Exception) {
+                                    DesktopLogger.warn("Speaker write error (device switched/disconnected): ${e.message}. Re-acquiring output line...")
+                                    runCatching { speaker?.close() }
+                                    speaker = null
+                                    line = getOrCreateSpeaker(format)
+                                    runCatching { line?.write(chunk, 0, chunk.size) }
+                                }
                                 lastPlaybackTime = System.currentTimeMillis()
                             } else {
                                 // Stream finished. Drain hardware line buffer completely so no words are cut off!
-                                runCatching { line.drain() }
+                                runCatching { line?.drain() }
                                 lastPlaybackTime = System.currentTimeMillis()
                                 break
                             }
                         }
                         setSpeakingState(false)
+                    } else {
+                        reportAudioError("Speaker output line မဖွင့်နိုင်ပါ။ Windows Sound output device ကို စစ်ပါ။")
+                        audioQueue.clear()
+                        setSpeakingState(false)
                     }
                 } catch (e: InterruptedException) {
                     break
                 } catch (e: Throwable) {
-                    // Ignore transient audio line error
+                    reportAudioError("Speaker playback error: ${e.message ?: e::class.simpleName}")
                 }
             }
         }.apply {
@@ -149,98 +209,193 @@ class WindowsAudioEngine(
         }
     }
 
+    internal fun applySoftwareAgcAndLimiter(
+        buffer: ByteArray,
+        count: Int,
+        rawRms: Float,
+        gainTracker: (Float) -> Unit = {},
+    ): ByteArray {
+        val targetRms = 0.065f
+        val desiredGain = if (rawRms in 0.008f..0.045f) {
+            (targetRms / rawRms).coerceIn(1.0f, 2.5f)
+        } else {
+            1.0f
+        }
+        gainTracker(desiredGain)
+
+        val currentGain = smoothedAgcGain
+        if (Math.abs(currentGain - 1.0f) < 0.05f) {
+            return buffer.copyOf(count)
+        }
+
+        val output = ByteArray(count)
+        for (i in 0 until count step 2) {
+            val low = buffer[i].toInt() and 0xFF
+            val high = buffer[i + 1].toInt() shl 8
+            val sample = (low or high).toShort()
+            val boosted = (sample.toFloat() * currentGain).toInt()
+            // Soft peak limiter to avoid harsh digital clipping
+            val clamped = boosted.coerceIn(-32000, 32000).toShort()
+            output[i] = (clamped.toInt() and 0xFF).toByte()
+            output[i + 1] = ((clamped.toInt() shr 8) and 0xFF).toByte()
+        }
+        return output
+    }
+
     fun startMicrophone(
         onPcmChunk: (base64Pcm: String) -> Unit,
         onVolumeLevel: (level: Float) -> Unit = {},
         onSilenceDetected: () -> Unit = {},
         onSpeechStarted: () -> Unit = {},
-    ) {
-        if (captureThread?.isAlive == true) return
+    ): Boolean {
+        if (captureThread?.isAlive == true) return true
         val format = inputPcmFormat()
-        val line = runCatching { AudioSystem.getTargetDataLine(format) }
-            .recoverCatching {
-                val info = DataLine.Info(TargetDataLine::class.java, format)
-                AudioSystem.getLine(info) as TargetDataLine
-            }.getOrNull() ?: return
-        runCatching {
-            line.open(format)
-            line.start()
-        }.onFailure { return }
+        val line = acquireTargetDataLine(format) ?: run {
+            reportAudioError("Microphone device မတွေ့ပါ။ Windows မှာ microphone permission/input device ကို စစ်ပါ။")
+            return false
+        }
         microphone = line
+        isCaptureActive = true
+        DesktopLogger.info("Audio telemetry: microphone started format=16kHz/mono/16bit chunkBytes=$CAPTURE_CHUNK_BYTES")
 
         captureThread = Thread {
+            var activeLine: TargetDataLine? = line
             val buffer = ByteArray(CAPTURE_CHUNK_BYTES)
-            var hasSpoken = false
-            var lastSpeechTime = System.currentTimeMillis()
-            var silenceTriggered = false
-            var speechActive = false
-            // Pre-roll queue to preserve the first ~192ms of speech before RMS threshold is crossed
-            val preRollQueue = java.util.ArrayDeque<String>(3)
+            val preRollBuffer = ConcurrentLinkedDeque<ByteArray>()
+            var isUserSpeaking = false
+            var lastSpeechTimestamp = 0L
+            var consecutiveBargeInCount = 0
 
             try {
-                while (!Thread.currentThread().isInterrupted && line.isOpen) {
-                    val count = line.read(buffer, 0, buffer.size)
-                    if (count > 0) {
-                        val chunk = buffer.copyOf(count)
-                        val rms = calculateRms(chunk, count)
-                        onVolumeLevel(rms)
-
-                        val now = System.currentTimeMillis()
-                        val currentlySpeaking = isSpeaking()
-
-                        // If speaker is active or cooling down, suppress mic input to eliminate acoustic echo feedback
-                        if (currentlySpeaking) {
-                            speechActive = false
-                            hasSpoken = false
-                            preRollQueue.clear()
+                while (!Thread.currentThread().isInterrupted && isCaptureActive) {
+                    var currentLine = activeLine
+                    if (currentLine == null || !currentLine.isOpen) {
+                        if (!isCaptureActive) break
+                        DesktopLogger.warn("Microphone line not open, attempting acquisition...")
+                        currentLine = acquireTargetDataLine(format)
+                        if (currentLine != null) {
+                            activeLine = currentLine
+                            microphone = currentLine
+                            DesktopLogger.info("Audio telemetry: Microphone line successfully re-acquired")
+                        } else {
+                            Thread.sleep(1000)
                             continue
                         }
+                    }
 
-                        val base64Chunk = Base64.getEncoder().encodeToString(chunk)
-                        val isUserSpeaking = rms > SPEECH_RMS_THRESHOLD
+                    val count = try {
+                        currentLine.read(buffer, 0, buffer.size)
+                    } catch (e: Exception) {
+                        DesktopLogger.warn("Microphone read exception: ${e.message}")
+                        -1
+                    }
 
-                        if (isUserSpeaking) {
-                            if (!speechActive) {
-                                speechActive = true
+                    if (count <= 0) {
+                        if (!isCaptureActive) break
+                        DesktopLogger.warn("Audio capture line disconnected or empty read ($count). Recovering audio line...")
+                        runCatching { currentLine.stop(); currentLine.close() }
+                        activeLine = null
+                        microphone = null
+                        onAudioError?.invoke("Microphone ပြတ်တောက်သွားပါသဖြင့် အလိုအလျောက် ပြန်လည်ရှာဖွေနေပါသည်...")
+                        Thread.sleep(800)
+                        val newLine = acquireTargetDataLine(format)
+                        if (newLine != null) {
+                            activeLine = newLine
+                            microphone = newLine
+                            DesktopLogger.info("Audio telemetry: Microphone line successfully recovered after disconnect")
+                            onAudioError?.invoke("Microphone ပြန်လည်ချိတ်ဆက်မှု အောင်မြင်ပါသည်")
+                        }
+                        continue
+                    }
+
+                    val rawChunk = buffer.copyOf(count)
+                    val rawRms = calculateRms(rawChunk, count)
+                    onVolumeLevel(rawRms)
+
+                    // Dynamic noise floor tracking
+                    if (rawRms < estimatedNoiseFloor) {
+                        estimatedNoiseFloor = estimatedNoiseFloor * 0.90f + rawRms * 0.10f
+                    } else {
+                        estimatedNoiseFloor = estimatedNoiseFloor * 0.998f + rawRms * 0.002f
+                    }
+                    val dynamicSpeechThreshold = (estimatedNoiseFloor + 0.012f).coerceIn(0.014f, 0.038f)
+
+                    // Software AGC & Soft Limiter
+                    val chunk = applySoftwareAgcAndLimiter(rawChunk, count, rawRms) { targetGain ->
+                        smoothedAgcGain = smoothedAgcGain * 0.85f + targetGain * 0.15f
+                    }
+
+                    val currentlySpeaking = isSpeaking()
+                    val now = System.currentTimeMillis()
+
+                    if (currentlySpeaking) {
+                        // Assistant is actively speaking out of speakers:
+                        // Suppress mic forwarding to prevent acoustic echo loop and self-interruption!
+                        if (rawRms > BARGE_IN_RMS_THRESHOLD) {
+                            consecutiveBargeInCount++
+                            if (consecutiveBargeInCount >= 2) {
+                                // True user barge-in! Stop assistant playback immediately.
+                                DesktopLogger.info("Audio telemetry: User barge-in detected (rms=${String.format("%.3f", rawRms)}), stopping playback")
+                                stopPlayback()
+                                isUserSpeaking = true
+                                lastSpeechTimestamp = now
                                 onSpeechStarted()
-                                // Flush pre-roll chunks so the initial phonemes/words are not clipped
-                                while (preRollQueue.isNotEmpty()) {
-                                    onPcmChunk(preRollQueue.removeFirst())
+                                val base64Chunk = Base64.getEncoder().encodeToString(chunk)
+                                onPcmChunk(base64Chunk)
+                                capturedChunks.incrementAndGet()
+                            }
+                        } else {
+                            consecutiveBargeInCount = 0
+                        }
+                    } else {
+                        consecutiveBargeInCount = 0
+
+                        if (rawRms > dynamicSpeechThreshold) {
+                            // User speech burst detected
+                            if (!isUserSpeaking) {
+                                isUserSpeaking = true
+                                onSpeechStarted()
+                                // Flush pre-roll chunks so initial syllable is preserved
+                                while (!preRollBuffer.isEmpty()) {
+                                    val preChunk = preRollBuffer.poll() ?: break
+                                    onPcmChunk(Base64.getEncoder().encodeToString(preChunk))
+                                    capturedChunks.incrementAndGet()
                                 }
                             }
-                            hasSpoken = true
-                            lastSpeechTime = now
-                            silenceTriggered = false
-                            // Forward user speech immediately
-                            onPcmChunk(base64Chunk)
-                        } else {
-                            if (speechActive && now - lastSpeechTime > 200L) {
-                                speechActive = false
+                            lastSpeechTimestamp = now
+                            onPcmChunk(Base64.getEncoder().encodeToString(chunk))
+                            val c = capturedChunks.incrementAndGet()
+                            if (c == 1L || c % 50L == 0L) {
+                                DesktopLogger.info("Audio telemetry: capturedChunks=$c (speechActive=true rms=${String.format("%.3f", rawRms)} dynamicThresh=${String.format("%.3f", dynamicSpeechThreshold)} agcGain=${String.format("%.2f", smoothedAgcGain)})")
                             }
-                            if (hasSpoken) {
-                                // While in an active speech turn, forward pause chunks so VAD senses natural speech pauses
-                                onPcmChunk(base64Chunk)
-                                if (!silenceTriggered && (now - lastSpeechTime > END_OF_TURN_SILENCE_MS)) {
-                                    silenceTriggered = true
-                                    hasSpoken = false
-                                    speechActive = false
+                        } else {
+                            // Below threshold (silence/ambient)
+                            if (isUserSpeaking) {
+                                if (now - lastSpeechTimestamp < SPEECH_HANGOVER_MS) {
+                                    // Natural pause between words: keep forwarding
+                                    onPcmChunk(Base64.getEncoder().encodeToString(chunk))
+                                    capturedChunks.incrementAndGet()
+                                } else {
+                                    // User has finished speaking this turn!
+                                    isUserSpeaking = false
+                                    DesktopLogger.info("Audio telemetry: Turn silence detected (hangover elapsed)")
                                     onSilenceDetected()
                                 }
                             } else {
-                                // When idle (user not speaking), only keep a small rolling pre-roll buffer
-                                // DO NOT send continuous idle silence to Gemini Live to prevent <no speech detected> loops
-                                if (preRollQueue.size >= 3) {
-                                    preRollQueue.removeFirst()
+                                // Ambient room noise: DO NOT send to Gemini Live!
+                                // Store in rolling pre-roll buffer
+                                preRollBuffer.add(chunk)
+                                while (preRollBuffer.size > PRE_ROLL_CHUNKS) {
+                                    preRollBuffer.poll()
                                 }
-                                preRollQueue.addLast(base64Chunk)
                             }
                         }
                     }
                 }
             } finally {
                 runCatching {
-                    line.stop()
-                    line.close()
+                    activeLine?.stop()
+                    activeLine?.close()
                 }
             }
         }.apply {
@@ -248,9 +403,10 @@ class WindowsAudioEngine(
             isDaemon = true
             start()
         }
+        return true
     }
 
-    private fun calculateRms(buffer: ByteArray, count: Int): Float {
+    internal fun calculateRms(buffer: ByteArray, count: Int): Float {
         var sum = 0.0
         val samples = count / 2
         for (i in 0 until count step 2) {
@@ -264,6 +420,7 @@ class WindowsAudioEngine(
     }
 
     fun stopMicrophone() {
+        isCaptureActive = false
         captureThread?.interrupt()
         captureThread = null
         runCatching {
@@ -281,8 +438,19 @@ class WindowsAudioEngine(
                 lastPlaybackTime = System.currentTimeMillis()
                 val aligned = if (data.size % 2 != 0) data.copyOf(data.size - 1) else data
                 audioQueue.offer(aligned)
+                val outputCount = queuedOutputChunks.incrementAndGet()
+                if (outputCount == 1L || outputCount % 20L == 0L) {
+                    DesktopLogger.info("Audio telemetry: queuedOutputChunks=$outputCount bytes=${aligned.size}")
+                }
             }
+        }.onFailure {
+            reportAudioError("အသံ response decode မအောင်မြင်ပါ: ${it.message ?: it::class.simpleName}")
         }
+    }
+
+    private fun reportAudioError(message: String) {
+        DesktopLogger.warn(message)
+        onAudioError?.invoke(message)
     }
 
     fun playRaw(bytes: ByteArray) {

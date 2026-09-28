@@ -1,0 +1,30 @@
+--input
+"C:\\Users\\nayli\\AndroidStudioProjects\\VoiceBrainLive-Desktop\\desktop\\build\\compose\\tmp\\createDistributable\\libs"
+--runtime-image
+"C:\\Users\\nayli\\AndroidStudioProjects\\VoiceBrainLive-Desktop\\desktop\\build\\compose\\tmp\\main\\runtime"
+--resource-dir
+"C:\\Users\\nayli\\AndroidStudioProjects\\VoiceBrainLive-Desktop\\desktop\\build\\compose\\tmp\\resources"
+--java-options
+"'-Dcompose.application.resources.dir=$APPDIR\\resources'"
+--main-jar
+"desktop-1.0.0-790a2a56aa327f49f9bb664797d14.jar"
+--main-class
+"com.example.voicebrainlive.desktop.MainKt"
+--icon
+"C:\\Users\\nayli\\AndroidStudioProjects\\VoiceBrainLive-Desktop\\desktop\\src\\main\\resources\\nilar_ai_logo.ico"
+--java-options
+"'-Dcompose.application.configure.swing.globals=true'"
+--java-options
+"'-Dskiko.library.path=$APPDIR'"
+--type
+"app-image"
+--dest
+"C:\\Users\\nayli\\AndroidStudioProjects\\VoiceBrainLive-Desktop\\desktop\\build\\compose\\binaries\\main\\app"
+--name
+"NilarAI"
+--description
+"Nilar AI — Burmese Voice Assistant"
+--app-version
+"1.0.0"
+--vendor
+"Nilar AI"

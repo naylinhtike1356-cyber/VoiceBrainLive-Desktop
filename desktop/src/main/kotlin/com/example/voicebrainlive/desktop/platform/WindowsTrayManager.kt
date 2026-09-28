@@ -24,7 +24,7 @@ class WindowsTrayManager(
         if (!SystemTray.isSupported() || trayIcon != null) return
 
         val menu = PopupMenu().apply {
-            add(MenuItem("💻 Open VoiceBrainLive  (Ctrl+Alt+W)").also { it.addActionListener { onShow() } })
+            add(MenuItem("💎 Open Nilar AI  (Ctrl+Alt+W)").also { it.addActionListener { onShow() } })
             add(MenuItem("⚡ Quick Command  (Ctrl+Alt+Enter)").also { it.addActionListener { onCommandMode() } })
             add(MenuItem("🎤 Start/Stop Voice  (Ctrl+Alt+Space)").also { it.addActionListener { onToggleListening() } })
             add(MenuItem("🖼️ Screen Vision  (Ctrl+Alt+V)").also { it.addActionListener { onVisionScan() } })
@@ -33,10 +33,10 @@ class WindowsTrayManager(
             add(MenuItem("🤖 Show Desktop Robot").also { it.addActionListener { onShowRobot() } })
             add(MenuItem("🙈 Hide Desktop Robot").also { it.addActionListener { onHideRobot() } })
             addSeparator()
-            add(MenuItem("✕ Exit VoiceBrainLive").also { it.addActionListener { remove(); onExit() } })
+            add(MenuItem("✕ Exit Nilar AI").also { it.addActionListener { remove(); onExit() } })
         }
 
-        trayIcon = TrayIcon(createIcon(), "VoiceBrainLive (Running in Background)", menu).also { icon ->
+        trayIcon = TrayIcon(createIcon(), "Nilar AI (Running in Background)", menu).also { icon ->
             icon.isImageAutoSize = true
             icon.addActionListener { onShow() }
             try {
@@ -64,24 +64,28 @@ class WindowsTrayManager(
 
     private fun createIcon(): BufferedImage {
         val size = 32
-        val image = BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB)
-        val g = image.createGraphics()
-        g.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON)
-
-        // Dark circular badge
-        g.color = Color(16, 24, 39)
-        g.fillRoundRect(2, 2, size - 4, size - 4, 10, 10)
-
-        // Outer cyan border
-        g.color = Color(124, 156, 255)
-        g.drawRoundRect(2, 2, size - 5, size - 5, 10, 10)
-
-        // Glowing Mint Core
-        g.color = Color(85, 230, 193)
-        g.fillOval(10, 10, 12, 12)
-
-        g.dispose()
-        return image
+        return runCatching {
+            val stream = javaClass.classLoader.getResourceAsStream("nilar_ai_logo.png")
+            if (stream != null) {
+                val raw = javax.imageio.ImageIO.read(stream)
+                val scaled = BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB)
+                val g = scaled.createGraphics()
+                g.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION, java.awt.RenderingHints.VALUE_INTERPOLATION_BICUBIC)
+                g.setRenderingHint(java.awt.RenderingHints.KEY_RENDERING, java.awt.RenderingHints.VALUE_RENDER_QUALITY)
+                g.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON)
+                g.drawImage(raw, 0, 0, size, size, null)
+                g.dispose()
+                scaled
+            } else null
+        }.getOrNull() ?: run {
+            val image = BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB)
+            val g = image.createGraphics()
+            g.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON)
+            g.color = Color(0, 180, 255)
+            g.drawOval(4, 4, size - 8, size - 8)
+            g.dispose()
+            image
+        }
     }
 }
 

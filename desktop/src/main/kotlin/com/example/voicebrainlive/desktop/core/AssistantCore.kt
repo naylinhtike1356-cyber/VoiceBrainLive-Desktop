@@ -27,6 +27,8 @@ data class CommandResult(
 interface VoiceSession {
     suspend fun connect(): Result<Unit>
     suspend fun sendText(text: String): Result<Unit>
+    /** Sends a prompt that should produce assistant audio without adding it to the user's transcript. */
+    suspend fun sendAssistantPrompt(text: String): Result<Unit> = sendText(text)
     fun sendAudioChunk(base64Pcm: String): Boolean
     suspend fun flushAudioTurn(): Result<Unit>
     fun clearAudioBuffer()
@@ -81,6 +83,7 @@ data class AssistantUiState(
             text = "မင်္ဂလာပါရှင်! ကျွန်မက VoiceBrainLive နည်းပညာကျွမ်းကျင် ကွန်ပျူတာလက်ထောက် ဖြစ်ပါတယ်။ ကွန်ပျူတာ အသုံးပြုခြင်း၊ Apps ဖွင့်/ပိတ်ခြင်း၊ စက်အခြေအနေစစ်ဆေးခြင်း၊ စခရင်ဖတ်ရှုခြင်းနှင့် Programming/IT နည်းပညာဆိုင်ရာ မည်သည့်အကြောင်းအရာမဆို မေးမြန်းတိုင်ပင် ခိုင်းစေနိုင်ပါတယ်ရှင်။",
         )
     ),
+    val activeGoal: GoalDefinition? = null,
 )
 
 class AssistantController(
@@ -186,6 +189,12 @@ class AssistantController(
 
     fun updateStatus(text: String) {
         val normalized = text.lowercase()
+        val connectionLost = normalized.contains("disconnect") ||
+            normalized.contains("timeout") ||
+            normalized.contains("error") ||
+            normalized.contains("မအောင်မြင်") ||
+            normalized.contains("မရနိုင်") ||
+            normalized.contains("မအသင့်")
         val phase = when {
             normalized.contains("connect") || normalized.contains("ချိတ်ဆက်") -> AssistantPhase.CONNECTING
             normalized.contains("နားထောင်") || normalized.contains("listen") -> AssistantPhase.LISTENING
@@ -198,7 +207,7 @@ class AssistantController(
         _state.value = _state.value.copy(
             status = text,
             phase = phase,
-            isConnected = if (text.startsWith("Disconnected") || text.startsWith("Gemini error") || text.contains("socket closed", ignoreCase = true)) false else _state.value.isConnected,
+            isConnected = if (connectionLost) false else _state.value.isConnected,
         )
     }
 
@@ -220,6 +229,10 @@ class AssistantController(
         _state.value = _state.value.copy(confirmationMessage = null)
     }
 
+    fun updatePhase(phase: AssistantPhase) {
+        _state.value = _state.value.copy(phase = phase)
+    }
+
     fun recordAction(command: String, result: CommandResult) {
         val entry = ActionHistoryEntry(command, result.message, result.success)
         val msgs = _state.value.messages
@@ -233,6 +246,14 @@ class AssistantController(
             history = (_state.value.history + entry).takeLast(MAX_HISTORY),
             messages = (msgs + systemMsg).takeLast(100)
         )
+    }
+
+    fun updateActiveGoal(goal: GoalDefinition?) {
+        _state.value = _state.value.copy(activeGoal = goal)
+    }
+
+    fun clearActiveGoal() {
+        _state.value = _state.value.copy(activeGoal = null)
     }
 
     fun disconnect() {

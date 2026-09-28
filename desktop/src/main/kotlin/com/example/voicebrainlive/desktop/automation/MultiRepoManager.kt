@@ -117,6 +117,103 @@ class MultiRepoManager(
         }
     }
 
+    /**
+     * Inspects git status for a specific project or current workspace.
+     */
+    fun getRepoStatus(projectNameQuery: String? = null): ProcessResult {
+        val projectDir = if (!projectNameQuery.isNullOrBlank()) {
+            projectResolver.resolveProjectDirectory(projectNameQuery)
+        } else {
+            File(System.getProperty("user.dir") ?: ".")
+        } ?: return ProcessResult(false, "'${projectNameQuery ?: "current"}' ပရောဂျက်ကို ရှာမတွေ့ပါ။")
+
+        if (!File(projectDir, ".git").exists()) {
+            return ProcessResult(false, "'${projectDir.name}' သည် Git repository မဟုတ်ပါရှင်။")
+        }
+
+        val branch = runGitCommand(projectDir, listOf("branch", "--show-current")).ifBlank {
+            runGitCommand(projectDir, listOf("rev-parse", "--abbrev-ref", "HEAD")).ifBlank { "main" }
+        }
+        val statusLines = runGitCommand(projectDir, listOf("status", "--porcelain"))
+            .lines()
+            .filter { it.isNotBlank() }
+
+        val unpushed = runGitCommand(projectDir, listOf("log", "@{u}..HEAD", "--oneline"))
+            .lines()
+            .filter { it.isNotBlank() }
+
+        val lastCommit = runGitCommand(projectDir, listOf("log", "-1", "--pretty=format:%h - %s (%cr)"))
+
+        val report = buildString {
+            appendLine("📁 Git Status: **${projectDir.name}**")
+            appendLine("• Branch: `$branch`")
+            if (statusLines.isEmpty()) {
+                appendLine("• Working Tree: ✓ Clean (အပြောင်းအလဲမရှိပါ)")
+            } else {
+                appendLine("• Uncommitted: ⚠️ ${statusLines.size} files ပြင်ဆင်ထားပါသည်")
+                statusLines.take(8).forEach { appendLine("  - $it") }
+                if (statusLines.size > 8) appendLine("  - ... (${statusLines.size - 8} files more)")
+            }
+            if (unpushed.isNotEmpty()) {
+                appendLine("• Unpushed Commits: 🚀 ${unpushed.size} commits မ push ရသေးပါ")
+            }
+            if (lastCommit.isNotBlank()) {
+                appendLine("• Last Commit: $lastCommit")
+            }
+        }.trim()
+
+        return ProcessResult(true, report)
+    }
+
+    /**
+     * Commits all changes in the project with a commit message.
+     */
+    fun commitAllChanges(projectNameQuery: String?, commitMessage: String): ProcessResult {
+        val projectDir = if (!projectNameQuery.isNullOrBlank()) {
+            projectResolver.resolveProjectDirectory(projectNameQuery)
+        } else {
+            File(System.getProperty("user.dir") ?: ".")
+        } ?: return ProcessResult(false, "'${projectNameQuery ?: "current"}' ပရောဂျက်ကို ရှာမတွေ့ပါ။")
+
+        if (!File(projectDir, ".git").exists()) {
+            return ProcessResult(false, "'${projectDir.name}' သည် Git repository မဟုတ်ပါရှင်။")
+        }
+
+        val cleanMsg = commitMessage.trim().ifBlank { "chore: update from Nilar AI assistant" }
+        runGitCommand(projectDir, listOf("add", "-A"))
+        val commitOut = runGitCommand(projectDir, listOf("commit", "-m", cleanMsg))
+
+        return if (commitOut.contains("files changed", ignoreCase = true) || commitOut.contains("file changed", ignoreCase = true)) {
+            ProcessResult(true, "Project '${projectDir.name}' တွင် Commit အောင်မြင်စွာ ပြုလုပ်ပြီးပါပြီရှင်: '$cleanMsg'")
+        } else if (commitOut.contains("nothing to commit", ignoreCase = true)) {
+            ProcessResult(true, "Project '${projectDir.name}' တွင် commit ပြုလုပ်ရန် အပြောင်းအလဲ အသစ်မရှိပါ (Working tree clean)။")
+        } else {
+            ProcessResult(false, "Commit ပြုလုပ်ရာတွင် အခက်အခဲရှိပါသည်: $commitOut")
+        }
+    }
+
+    /**
+     * Pushes committed changes to remote repository.
+     */
+    fun pushChanges(projectNameQuery: String?): ProcessResult {
+        val projectDir = if (!projectNameQuery.isNullOrBlank()) {
+            projectResolver.resolveProjectDirectory(projectNameQuery)
+        } else {
+            File(System.getProperty("user.dir") ?: ".")
+        } ?: return ProcessResult(false, "'${projectNameQuery ?: "current"}' ပရောဂျက်ကို ရှာမတွေ့ပါ။")
+
+        if (!File(projectDir, ".git").exists()) {
+            return ProcessResult(false, "'${projectDir.name}' သည် Git repository မဟုတ်ပါရှင်။")
+        }
+
+        val output = runGitCommand(projectDir, listOf("push"))
+        return if (output.contains("Everything up-to-date", ignoreCase = true) || output.contains("->", ignoreCase = true) || output.isBlank()) {
+            ProcessResult(true, "Project '${projectDir.name}' ၏ အပြောင်းအလဲများကို Remote Repository သို့ အောင်မြင်စွာ Push လုပ်ပြီးပါပြီရှင်။")
+        } else {
+            ProcessResult(false, "Git push မအောင်မြင်ပါ: $output")
+        }
+    }
+
     private fun runGitCommand(projectDir: File, args: List<String>): String {
         return try {
             val command = mutableListOf("git")

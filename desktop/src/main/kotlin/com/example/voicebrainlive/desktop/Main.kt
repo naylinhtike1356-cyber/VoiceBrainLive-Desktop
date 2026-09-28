@@ -73,8 +73,14 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.ui.text.style.TextOverflow
 import com.example.voicebrainlive.desktop.core.AssistantPhase
+import com.example.voicebrainlive.desktop.core.GoalDefinition
+import com.example.voicebrainlive.desktop.core.GoalStatus
+import com.example.voicebrainlive.desktop.core.StepStatus
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
 import java.nio.channels.FileChannel
@@ -82,31 +88,57 @@ import java.nio.channels.FileLock
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
+import com.example.voicebrainlive.desktop.platform.DesktopLogger
+import com.example.voicebrainlive.desktop.ui.NeuralBrainScreen
 
 private class SingleInstanceGuard private constructor(
     private val channel: FileChannel,
     private val lock: FileLock,
+    private val lockFile: Path,
 ) : AutoCloseable {
     override fun close() {
         runCatching { lock.release() }
         runCatching { channel.close() }
+        runCatching { Files.deleteIfExists(lockFile) }
     }
 
     companion object {
         fun acquire(): SingleInstanceGuard? = runCatching {
             val dir = Path.of(System.getenv("APPDATA"), "VoiceBrainLive")
             Files.createDirectories(dir)
+            val lockFile = dir.resolve("instance.lock")
             val channel = FileChannel.open(
-                dir.resolve("instance.lock"),
+                lockFile,
                 StandardOpenOption.CREATE,
                 StandardOpenOption.WRITE,
+                StandardOpenOption.READ,
             )
             val lock = channel.tryLock() ?: run {
+                DesktopLogger.info("SingleInstanceGuard: another instance is running; signaling to show window and exiting secondary process.")
                 channel.close()
+                signalRunningInstance(dir)
                 return null
             }
-            SingleInstanceGuard(channel, lock)
+            DesktopLogger.info("SingleInstanceGuard: acquired lock successfully.")
+            runCatching { Files.deleteIfExists(dir.resolve("show_window.trigger")) }
+            SingleInstanceGuard(channel, lock, lockFile)
         }.getOrNull()
+
+        private fun signalRunningInstance(dir: Path) {
+            runCatching {
+                val trigger = dir.resolve("show_window.trigger")
+                Files.writeString(
+                    trigger,
+                    System.currentTimeMillis().toString(),
+                    StandardOpenOption.CREATE,
+                    StandardOpenOption.TRUNCATE_EXISTING,
+                    StandardOpenOption.WRITE,
+                )
+            }
+            runCatching {
+                ProcessBuilder("powershell.exe", "-NoProfile", "-Command", "(New-Object -ComObject WScript.Shell).AppActivate('Nilar AI')").start()
+            }
+        }
     }
 }
 
@@ -127,64 +159,144 @@ private val BorderColor = Color(0xFF1E293B)
 private val BorderGlow = Color(0xFF334155)
 
 fun main() {
-    val instanceGuard = SingleInstanceGuard.acquire() ?: return
-    application {
-        DisposableEffect(Unit) {
-            onDispose { instanceGuard.close() }
-        }
-    val windowState = rememberWindowState(width = 980.dp, height = 700.dp)
-    var mainWindowVisible by remember { mutableStateOf(true) }
-    val runtime = remember {
-        DesktopRuntime(
-            onExitRequested = ::exitApplication,
-            onMainWindowRequested = { mainWindowVisible = true },
-            onToggleMainWindowRequested = { mainWindowVisible = !mainWindowVisible },
-        )
+    Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+        DesktopLogger.warn("FATAL UNCAUGHT EXCEPTION on thread ${thread.name}: ${throwable.stackTraceToString()}")
     }
-    var robotVisible by remember { mutableStateOf(runtime.storedRobotVisible()) }
-
-    DisposableEffect(runtime) {
-        runtime.start()
-        onDispose { runtime.close() }
+    DesktopLogger.info("NilarAI main() started. PID=${ProcessHandle.current().pid()}")
+    val instanceGuard = SingleInstanceGuard.acquire()
+    if (instanceGuard == null) {
+        DesktopLogger.info("SingleInstanceGuard returned null -> secondary process exiting.")
+        return
     }
+    try {
+        application {
+            DisposableEffect(Unit) {
+                onDispose {
+                    DesktopLogger.info("Application disposed -> closing instanceGuard")
+                    instanceGuard.close()
+                }
+            }
+            val windowState = rememberWindowState(width = 980.dp, height = 700.dp)
+            var mainWindowVisible by remember { mutableStateOf(true) }
+            var bringToFrontTrigger by remember { mutableStateOf(0L) }
 
-    FloatingRobotWindow(
-        runtime = runtime,
-        visible = robotVisible,
-        onHide = {
-            robotVisible = false
-            runtime.setRobotVisible(false)
-        },
-    )
+            val bringToFront: () -> Unit = {
+                DesktopLogger.info("bringToFront called: making main window visible and restoring")
+                mainWindowVisible = true
+                windowState.isMinimized = false
+                bringToFrontTrigger = System.currentTimeMillis()
+            }
 
-    Window(
-        visible = mainWindowVisible,
-        onCloseRequest = {
-            runtime.close()
-            exitApplication()
-        },
-        title = "VoiceBrainLive",
-        state = windowState,
-    ) {
-        VoiceBrainDesktopApp(
-            runtime = runtime,
-            commandModeRequest = runtime.commandModeRequest,
-            robotVisible = robotVisible,
-            onRobotVisibilityChange = { robotVisible = it; runtime.setRobotVisible(it) },
-            onMinimizeToBackground = {
-                mainWindowVisible = false
-                runtime.showBackgroundNotification(
-                    "VoiceBrainLive",
-                    "VoiceBrainLive သည် နောက်ခံတွင် ဆက်လက်အလုပ်လုပ်နေပါသည်။ Global Shortcut (Ctrl + Alt + Space) ဖြင့် အသံသုံးနိုင်ပါသည်။"
+            val runtime = remember {
+                DesktopRuntime(
+                    onExitRequested = {
+                        DesktopLogger.info("Runtime requested exitApplication()")
+                        exitApplication()
+                    },
+                    onMainWindowRequested = bringToFront,
+                    onToggleMainWindowRequested = {
+                        if (mainWindowVisible && !windowState.isMinimized) {
+                            DesktopLogger.info("Toggle main window -> hiding to background")
+                            mainWindowVisible = false
+                        } else {
+                            DesktopLogger.info("Toggle main window -> bringing to front")
+                            bringToFront()
+                        }
+                    },
                 )
+            }
+            var robotVisible by remember { mutableStateOf(runtime.storedRobotVisible()) }
+
+            DisposableEffect(runtime) {
+                DesktopLogger.info("Main calling runtime.start()")
+                runtime.start()
+                onDispose {
+                    DesktopLogger.info("Main disposing runtime -> runtime.close()")
+                    runtime.close()
+                }
+            }
+
+            // File-based IPC listener: Detect when user clicks Desktop shortcut while app is already running
+            LaunchedEffect(Unit) {
+                val dir = Path.of(System.getenv("APPDATA"), "VoiceBrainLive")
+                val trigger = dir.resolve("show_window.trigger")
+                var lastModified = if (Files.exists(trigger)) {
+                    runCatching { Files.getLastModifiedTime(trigger).toMillis() }.getOrDefault(0L)
+                } else {
+                    0L
+                }
+                while (true) {
+                    delay(200)
+                    runCatching {
+                        if (Files.exists(trigger)) {
+                            val currentModified = Files.getLastModifiedTime(trigger).toMillis()
+                            if (currentModified > lastModified) {
+                                lastModified = currentModified
+                                DesktopLogger.info("Detected show_window.trigger changed ($currentModified) -> bringing window to front")
+                                bringToFront()
+                            }
+                        }
+                    }
+                }
+            }
+
+        FloatingRobotWindow(
+            runtime = runtime,
+            visible = robotVisible,
+            onHide = {
+                robotVisible = false
+                runtime.setRobotVisible(false)
             },
-            onExitApp = {
+        )
+
+        LaunchedEffect(mainWindowVisible, windowState.isMinimized) {
+            val effectiveVisible = mainWindowVisible && !windowState.isMinimized
+            runtime.onWindowVisibilityChanged(effectiveVisible)
+        }
+
+        Window(
+            visible = mainWindowVisible,
+            onCloseRequest = {
                 runtime.close()
                 exitApplication()
             },
-        )
+            title = "Nilar AI — မြန်မာ AI အသံလက်ထောက်",
+            icon = androidx.compose.ui.res.painterResource("nilar_ai_logo.png"),
+            state = windowState,
+        ) {
+            LaunchedEffect(bringToFrontTrigger) {
+                if (bringToFrontTrigger > 0L) {
+                    runCatching {
+                        window.isAlwaysOnTop = true
+                        window.toFront()
+                        window.requestFocus()
+                        window.isAlwaysOnTop = false
+                    }
+                }
+            }
+
+            VoiceBrainDesktopApp(
+                runtime = runtime,
+                commandModeRequest = runtime.commandModeRequest,
+                robotVisible = robotVisible,
+                onRobotVisibilityChange = { robotVisible = it; runtime.setRobotVisible(it) },
+                onMinimizeToBackground = {
+                    mainWindowVisible = false
+                    runtime.showBackgroundNotification(
+                        "Nilar AI",
+                        "Nilar AI သည် နောက်ခံတွင် ဆက်လက်အလုပ်လုပ်နေပါသည်။ Global Shortcut (Ctrl + Alt + Space) ဖြင့် အသံသုံးနိုင်ပါသည်။"
+                    )
+                },
+                onExitApp = {
+                    runtime.close()
+                    exitApplication()
+                },
+            )
+        }
     }
-    }
+} catch (t: Throwable) {
+    DesktopLogger.warn("Fatal application error: ${t.stackTraceToString()}")
+}
 }
 
 @Composable
@@ -206,14 +318,22 @@ private fun VoiceBrainDesktopApp(
     var notionParentPageId by remember { mutableStateOf(runtime.storedNotionParentPageId()) }
     var showApiKey by remember { mutableStateOf(false) }
     var showNotionToken by remember { mutableStateOf(false) }
+    var showNeuralBrain by remember { mutableStateOf(false) }
     var selectedCommandIndex by remember { mutableStateOf(0) }
     val state by runtime.assistant.state.collectAsState()
     val voiceTyping by runtime.voiceTypingMode.collectAsState()
     val commandRequest by commandModeRequest.collectAsState()
+    val neuralBrainRequest by runtime.showNeuralBrainRequest.collectAsState()
     val commandFocusRequester = remember { FocusRequester() }
     val chatScroll = rememberScrollState()
     LaunchedEffect(commandRequest) {
         if (commandRequest > 0L) commandFocusRequester.requestFocus()
+    }
+    LaunchedEffect(neuralBrainRequest) {
+        if (neuralBrainRequest > 0L) {
+            showNeuralBrain = true
+            showSettings = false
+        }
     }
     val quickActionsScroll = rememberScrollState()
 
@@ -223,6 +343,11 @@ private fun VoiceBrainDesktopApp(
     }
 
     val quickActions = listOf(
+        "🧠 Neural Brain" to "ဦးနှောက်မှတ်ဉာဏ် ကြည့်မယ်",
+        "⚡ Work Mode" to "အလုပ်စမယ်",
+        "☕ Rest Mode" to "အနားယူမယ်",
+        "🎯 Auto-Deploy Goal" to "Android ဖုန်းကို wireless ချိတ်ပြီး VoiceBrainLive-Desktop ကို build စစ်ပေး၊ Notion မှာ task update ပေးပါ",
+        "🎯 Workspace Setup" to "work mode ဖွင့်ပေးပါ",
         "⚡ Auto-Fix Issue" to "VoiceBrainLive ပရောဂျက်မှာ bug ရှာပြင်ပေးပါ",
         "🔄 Auto-Heal Project" to "VoiceBrainLive project ကို self heal လုပ်ပြီး compile စမ်းပေးပါ",
         "📱 Run on Emulator" to "VoiceBrainLive app ကို emulator ပေါ်တင်ပြီး crash စစ်ပေးပါ",
@@ -317,6 +442,11 @@ private fun VoiceBrainDesktopApp(
                     },
                     onExitApp = onExitApp,
                 )
+            } else if (showNeuralBrain) {
+                NeuralBrainScreen(
+                    runtime = runtime,
+                    onClose = { showNeuralBrain = false }
+                )
             } else {
                 Column(
                     modifier = Modifier
@@ -341,18 +471,18 @@ private fun VoiceBrainDesktopApp(
                                 modifier = Modifier.size(38.dp),
                             ) {
                                 Box(contentAlignment = Alignment.Center) {
-                                    Text("🤖", fontSize = 18.sp)
+                                    Text("💎", fontSize = 18.sp)
                                 }
                             }
                             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    Text("VoiceBrain", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = TextMain)
+                                    Text("Nilar AI", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = TextMain)
                                     Surface(
                                         color = AccentMint.copy(alpha = 0.15f),
                                         shape = RoundedCornerShape(4.dp),
                                         border = androidx.compose.foundation.BorderStroke(0.5.dp, AccentMint.copy(alpha = 0.4f))
                                     ) {
-                                        Text("LIVE", color = AccentMint, fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp))
+                                        Text("VOICE", color = AccentMint, fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp))
                                     }
                                     Surface(
                                         color = AccentCyan.copy(alpha = 0.12f),
@@ -362,11 +492,28 @@ private fun VoiceBrainDesktopApp(
                                         Text(geminiModel.removePrefix("gemini-").removePrefix("models/"), color = AccentCyan, fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp))
                                     }
                                 }
-                                Text("Voice-first Intelligent Windows Control", color = TextSub, fontSize = 10.sp)
+                                Text("မြန်မာ AI စကားပြော ကွန်ပျူတာ လက်ထောက်", color = TextSub, fontSize = 10.sp)
                             }
                         }
 
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            // Neural Brain Matrix Button
+                            Surface(
+                                color = if (showNeuralBrain) CardBg else CardSoft,
+                                shape = RoundedCornerShape(10.dp),
+                                border = androidx.compose.foundation.BorderStroke(
+                                    1.dp,
+                                    if (showNeuralBrain) AccentCyan else BorderGlow
+                                ),
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clickable { showNeuralBrain = !showNeuralBrain }
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Text("🧠", fontSize = 16.sp)
+                                }
+                            }
+
                             // Notion Hub Button
                             Surface(
                                 color = CardSoft,
@@ -504,6 +651,14 @@ private fun VoiceBrainDesktopApp(
                                         Text("Conversation Log", color = TextMain, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                                     }
                                     Text("Burmese AI Assistant", color = TextSub, fontSize = 11.sp)
+                                }
+                                state.activeGoal?.let { activeGoal ->
+                                    GoalProgressCard(
+                                        goal = activeGoal,
+                                        onCancel = { runtime.cancelActiveGoal() },
+                                        onClear = { runtime.clearActiveGoal() }
+                                    )
+                                    Spacer(modifier = Modifier.height(10.dp))
                                 }
                                 SelectionContainer(
                                     modifier = Modifier
@@ -1269,6 +1424,181 @@ private fun SettingsPanel(
                     shape = RoundedCornerShape(8.dp)
                 ) {
                     Text("Exit App", fontSize = 12.sp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GoalProgressCard(
+    goal: GoalDefinition,
+    onCancel: () -> Unit,
+    onClear: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = CardSoft),
+        shape = RoundedCornerShape(12.dp),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            when (goal.status) {
+                GoalStatus.COMPLETED -> AccentMint
+                GoalStatus.FAILED -> AccentRose
+                GoalStatus.CANCELLED -> AccentGold
+                else -> AccentCyan
+            }
+        )
+    ) {
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.weight(1f, fill = false)
+                ) {
+                    Text(
+                        when (goal.status) {
+                            GoalStatus.COMPLETED -> "🎉"
+                            GoalStatus.FAILED -> "⚠️"
+                            GoalStatus.CANCELLED -> "⏹️"
+                            else -> "🎯"
+                        },
+                        fontSize = 14.sp
+                    )
+                    Text(
+                        goal.title,
+                        color = TextMain,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                Surface(
+                    color = when (goal.status) {
+                        GoalStatus.COMPLETED -> AccentMint.copy(alpha = 0.2f)
+                        GoalStatus.FAILED -> AccentRose.copy(alpha = 0.2f)
+                        GoalStatus.CANCELLED -> AccentGold.copy(alpha = 0.2f)
+                        else -> AccentCyan.copy(alpha = 0.2f)
+                    },
+                    shape = RoundedCornerShape(6.dp)
+                ) {
+                    Text(
+                        when (goal.status) {
+                            GoalStatus.COMPLETED -> "ပြီးစီးပါပြီ"
+                            GoalStatus.FAILED -> "မအောင်မြင်ပါ"
+                            GoalStatus.CANCELLED -> "ရပ်တန့်ထားသည်"
+                            GoalStatus.EXECUTING -> "ဆောင်ရွက်နေပါသည် (${goal.completedStepsCount}/${goal.totalSteps})"
+                            GoalStatus.PLANNING -> "စီစဉ်နေပါသည်…"
+                            GoalStatus.PENDING -> "စောင့်ဆိုင်းနေပါသည်"
+                        },
+                        color = when (goal.status) {
+                            GoalStatus.COMPLETED -> AccentMint
+                            GoalStatus.FAILED -> AccentRose
+                            GoalStatus.CANCELLED -> AccentGold
+                            else -> AccentCyan
+                        },
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+            }
+
+            // Progress bar
+            LinearProgressIndicator(
+                progress = { goal.progress },
+                modifier = Modifier.fillMaxWidth().height(4.dp),
+                color = when (goal.status) {
+                    GoalStatus.COMPLETED -> AccentMint
+                    GoalStatus.FAILED -> AccentRose
+                    else -> AccentCyan
+                },
+                trackColor = BorderColor
+            )
+
+            // Step list
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                goal.steps.forEach { step ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(
+                                when (step.status) {
+                                    StepStatus.COMPLETED -> "✅"
+                                    StepStatus.RUNNING -> "🔄"
+                                    StepStatus.FAILED -> "❌"
+                                    StepStatus.SKIPPED -> "⏭️"
+                                    StepStatus.PENDING -> "⏳"
+                                },
+                                fontSize = 11.sp
+                            )
+                            Text(
+                                step.title,
+                                color = if (step.status == StepStatus.RUNNING) AccentMint else if (step.status == StepStatus.COMPLETED) TextMain else TextSub,
+                                fontSize = 11.sp,
+                                fontWeight = if (step.status == StepStatus.RUNNING) FontWeight.Bold else FontWeight.Normal,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+
+                        if (!step.outputMessage.isNullOrBlank()) {
+                            Text(
+                                step.outputMessage.take(28),
+                                color = TextSub,
+                                fontSize = 10.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Controls (Cancel / Clear)
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                if (goal.status == GoalStatus.EXECUTING || goal.status == GoalStatus.PLANNING) {
+                    Surface(
+                        color = AccentRose.copy(alpha = 0.2f),
+                        shape = RoundedCornerShape(6.dp),
+                        modifier = Modifier.clickable { onCancel() }
+                    ) {
+                        Text(
+                            "🛑 ရပ်တန့်မည်",
+                            color = AccentRose,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                } else {
+                    Surface(
+                        color = BorderGlow,
+                        shape = RoundedCornerShape(6.dp),
+                        modifier = Modifier.clickable { onClear() }
+                    ) {
+                        Text(
+                            "ရှင်းလင်းမည်",
+                            color = TextSub,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
                 }
             }
         }

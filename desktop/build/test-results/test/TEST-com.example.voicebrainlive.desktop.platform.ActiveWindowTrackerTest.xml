@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.example.voicebrainlive.desktop.platform.ActiveWindowTrackerTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-09-28T00:17:17.305Z" hostname="NAYLIN" time="0.024">
+  <properties/>
+  <testcase name="testActiveWindowPromptContextFormat" classname="com.example.voicebrainlive.desktop.platform.ActiveWindowTrackerTest" time="0.005"/>
+  <testcase name="testActiveWindowTrackerReturnsValidObject" classname="com.example.voicebrainlive.desktop.platform.ActiveWindowTrackerTest" time="0.008"/>
+  <testcase name="testBurmeseSummaryFormatting" classname="com.example.voicebrainlive.desktop.platform.ActiveWindowTrackerTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

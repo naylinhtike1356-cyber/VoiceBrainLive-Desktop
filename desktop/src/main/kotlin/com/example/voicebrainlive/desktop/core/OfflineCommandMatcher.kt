@@ -18,6 +18,37 @@ object OfflineCommandMatcher {
         "voice typing ပိတ်" to Triple("voice_typing_off", null, null),
         "voice typing off" to Triple("voice_typing_off", null, null),
 
+        // Physical Hands & Eyes (Mouse & Desktop actions)
+        "မောက်စ် နှိပ်" to Triple("mouse_click", null, null),
+        "မောက်စ် နှိပ်ပါ" to Triple("mouse_click", null, null),
+        "မောက်စ် နှိပ်ပေးပါ" to Triple("mouse_click", null, null),
+        "မောက်ကွန်စာ နှိပ်" to Triple("mouse_click", null, null),
+        "မောက်ကွန်စာ နှိပ်ပါ" to Triple("mouse_click", null, null),
+        "မောက်ကွန်စာ နှိပ်ပေးပါ" to Triple("mouse_click", null, null),
+        "မောက်ကဆာ နှိပ်" to Triple("mouse_click", null, null),
+        "mouse click" to Triple("mouse_click", null, null),
+        "click" to Triple("mouse_click", null, null),
+        "လက်ဝဲကလစ်" to Triple("mouse_click", null, null),
+        "ဒဘယ်ကလစ်" to Triple("mouse_double_click", null, null),
+        "double click" to Triple("mouse_double_click", null, null),
+        "မောက်စ် နှစ်ချက်နှိပ်" to Triple("mouse_double_click", null, null),
+        "မောက်ကွန်စာ နှစ်ချက်နှိပ်" to Triple("mouse_double_click", null, null),
+        "ရိုက်ကလစ်" to Triple("mouse_right_click", null, null),
+        "right click" to Triple("mouse_right_click", null, null),
+        "ညာဘက်ကလစ်" to Triple("mouse_right_click", null, null),
+        "မောက်စ် ညာဘက်နှိပ်" to Triple("mouse_right_click", null, null),
+        "မောက်ကွန်စာ ညာဘက်နှိပ်" to Triple("mouse_right_click", null, null),
+        "desktop ပြပါ" to Triple("show_desktop", null, null),
+        "desktop ပြ" to Triple("show_desktop", null, null),
+        "show desktop" to Triple("show_desktop", null, null),
+        "ဒက်စတော့ ပြပါ" to Triple("show_desktop", null, null),
+        "စခရင် အခြေအနေ" to Triple("screen_eyes", null, null),
+        "မျက်စိ" to Triple("screen_eyes", null, null),
+        "စခရင် စစ်ဆေး" to Triple("screen_eyes", null, null),
+        "screen eyes" to Triple("screen_eyes", null, null),
+        "ဆော့ဖ်ဝဲ စာရင်း ပြန်စစ်" to Triple("refresh_app_catalog", null, null),
+        "refresh app catalog" to Triple("refresh_app_catalog", null, null),
+
         // Active Window & Context Awareness
         "လက်ရှိ app" to Triple("get_active_window", null, null),
         "လက်ရှိ window" to Triple("get_active_window", null, null),
@@ -78,6 +109,7 @@ object OfflineCommandMatcher {
         "အခုဘယ်အချိန်ရှိပြီလဲ" to Triple("get_current_time", null, null),
         "အချိန်ဘယ်လောက်လဲ" to Triple("get_current_time", null, null),
         "အချိန် ဘယ်လောက်လဲ" to Triple("get_current_time", null, null),
+        "အချိန်ဘယ်လောက်ရှိပြီလဲ" to Triple("get_current_time", null, null),
         "အချိန်ပြောပြပါ" to Triple("get_current_time", null, null),
         "အချိန် ပြောပြပါ" to Triple("get_current_time", null, null),
         "လက်ရှိအချိန်" to Triple("get_current_time", null, null),
@@ -116,6 +148,35 @@ object OfflineCommandMatcher {
         "စက်ပိတ်တာ ပယ်ဖျက်ပါ" to Triple("cancel_shutdown", null, null),
         "cancel shutdown" to Triple("cancel_shutdown", null, null),
 
+        // Autonomous Goal & Multi-step Controls
+        "ပန်းတိုင် ရပ်" to Triple("cancel_goal", null, null),
+        "ပန်းတိုင် ရပ်ပါ" to Triple("cancel_goal", null, null),
+        "ပန်းတိုင် ဖျက်ပါ" to Triple("cancel_goal", null, null),
+        "အလုပ်ရပ်" to Triple("cancel_goal", null, null),
+        "အလုပ်ရပ်ပါ" to Triple("cancel_goal", null, null),
+        "cancel goal" to Triple("cancel_goal", null, null),
+        "stop goal" to Triple("cancel_goal", null, null),
+        "work mode" to Triple("run_voice_routine", "Work Mode (အလုပ်စမယ်)", null),
+        "work mode ဖွင့်" to Triple("run_voice_routine", "Work Mode (အလုပ်စမယ်)", null),
+        "work mode ဖွင့်ပါ" to Triple("run_voice_routine", "Work Mode (အလုပ်စမယ်)", null),
+        "အလုပ်စမယ်" to Triple("run_voice_routine", "Work Mode (အလုပ်စမယ်)", null),
+        "အလုပ်စတင်မယ်" to Triple("run_voice_routine", "Work Mode (အလုပ်စမယ်)", null),
+        "စလုပ်မယ်" to Triple("run_voice_routine", "Work Mode (အလုပ်စမယ်)", null),
+        "စာလေ့လာမယ်" to Triple("run_voice_routine", "Study Mode (စာလေ့လာမယ်)", null),
+        "study mode" to Triple("run_voice_routine", "Study Mode (စာလေ့လာမယ်)", null),
+        "စက်ရှင်းမယ်" to Triple("run_voice_routine", "Clean Workspace (စက်ရှင်းမယ်)", null),
+        "clean workspace" to Triple("run_voice_routine", "Clean Workspace (စက်ရှင်းမယ်)", null),
+        "clean desktop" to Triple("run_voice_routine", "Clean Workspace (စက်ရှင်းမယ်)", null),
+        "အနားယူမယ်" to Triple("run_voice_routine", "Rest Mode (အနားယူမယ်)", null),
+        "rest mode" to Triple("run_voice_routine", "Rest Mode (အနားယူမယ်)", null),
+        "break time" to Triple("run_voice_routine", "Rest Mode (အနားယူမယ်)", null),
+        "ပရောဂျက်စစ်မယ်" to Triple("run_voice_routine", "Dev Inspect (ပရောဂျက်စစ်မယ်)", null),
+        "project စစ်မယ်" to Triple("run_voice_routine", "Dev Inspect (ပရောဂျက်စစ်မယ်)", null),
+        "ဦးနှောက်မှတ်ဉာဏ်" to Triple("show_neural_brain", null, null),
+        "neural brain" to Triple("show_neural_brain", null, null),
+        "မှတ်ဉာဏ်ပြ" to Triple("show_neural_brain", null, null),
+        "brain matrix" to Triple("show_neural_brain", null, null),
+
         // Window Controls & Display
         "window ကြီးပါ" to Triple("maximize_window", null, null),
         "window ချဲ့ပါ" to Triple("maximize_window", null, null),
@@ -135,10 +196,40 @@ object OfflineCommandMatcher {
         "close tab" to Triple("close_tab", null, null),
         "window အားလုံး သိမ်းပါ" to Triple("minimize_all", null, null),
         "window အားလုံး ချုံ့ပါ" to Triple("minimize_all", null, null),
-        "desktop ပြပါ" to Triple("minimize_all", null, null),
-        "show desktop" to Triple("minimize_all", null, null),
+        "desktop ပြပါ" to Triple("show_desktop", null, null),
+        "show desktop" to Triple("show_desktop", null, null),
         "minimize" to Triple("minimize_all", null, null),
         "minimize all" to Triple("minimize_all", null, null),
+
+        // Phase 2: Native Windows Snapping & Tab Controls
+        "window ဘယ်ဘက်ကပ်" to Triple("snap_window_left", null, null),
+        "window ဘယ်ဘက်" to Triple("snap_window_left", null, null),
+        "window ဘယ်ကပ်" to Triple("snap_window_left", null, null),
+        "ဘယ်ဘက်ကပ်" to Triple("snap_window_left", null, null),
+        "ဘယ်ကပ်" to Triple("snap_window_left", null, null),
+        "snap left" to Triple("snap_window_left", null, null),
+        "window ညာဘက်ကပ်" to Triple("snap_window_right", null, null),
+        "window ညာဘက်" to Triple("snap_window_right", null, null),
+        "window ညာကပ်" to Triple("snap_window_right", null, null),
+        "ညာဘက်ကပ်" to Triple("snap_window_right", null, null),
+        "ညာကပ်" to Triple("snap_window_right", null, null),
+        "snap right" to Triple("snap_window_right", null, null),
+        "window အပေါ်ကပ်" to Triple("snap_window_up", null, null),
+        "snap up" to Triple("snap_window_up", null, null),
+        "window အောက်ချ" to Triple("snap_window_down", null, null),
+        "snap down" to Triple("snap_window_down", null, null),
+        "tab အသစ်" to Triple("new_tab", null, null),
+        "tab အသစ်ဖွင့်" to Triple("new_tab", null, null),
+        "new tab" to Triple("new_tab", null, null),
+        "tab ကူး" to Triple("switch_tab", null, null),
+        "next tab" to Triple("switch_tab", null, null),
+        "tab ပြောင်း" to Triple("switch_tab", null, null),
+        "ui စစ်" to Triple("inspect_window_ui", null, null),
+        "ui စစ်ဆေး" to Triple("inspect_window_ui", null, null),
+        "ခလုတ်တွေပြ" to Triple("inspect_window_ui", null, null),
+        "ခလုတ်များပြ" to Triple("inspect_window_ui", null, null),
+        "inspect ui" to Triple("inspect_window_ui", null, null),
+        "list controls" to Triple("inspect_window_ui", null, null),
 
         "အလင်းတိုး" to Triple("brightness_up", null, null),
         "အလင်းတိုးပါ" to Triple("brightness_up", null, null),
@@ -163,6 +254,20 @@ object OfflineCommandMatcher {
         "take screenshot" to Triple("take_screenshot", null, null),
         "system status" to Triple("system_status", null, null),
         "စက်အခြေအနေ" to Triple("system_status", null, null),
+        "ram ရှင်း" to Triple("optimize_ram", null, null),
+        "ram ရှင်းပါ" to Triple("optimize_ram", null, null),
+        "ram ရှင်းပေး" to Triple("optimize_ram", null, null),
+        "ram ရှင်းပေးပါ" to Triple("optimize_ram", null, null),
+        "ram ချုံ့" to Triple("optimize_ram", null, null),
+        "ram ချုံ့ပါ" to Triple("optimize_ram", null, null),
+        "clean ram" to Triple("optimize_ram", null, null),
+        "optimize ram" to Triple("optimize_ram", null, null),
+        "memory ရှင်း" to Triple("optimize_ram", null, null),
+        "health check" to Triple("health_check", null, null),
+        "health စစ်" to Triple("health_check", null, null),
+        "app health" to Triple("health_check", null, null),
+        "watchdog စစ်" to Triple("health_check", null, null),
+        "system health စစ်" to Triple("health_check", null, null),
         "စက်အခြေအနေစစ်" to Triple("system_status", null, null),
         "စက်အခြေအနေ စစ်ပေးပါ" to Triple("system_status", null, null),
         "စက်အချက်အလက်" to Triple("system_status", null, null),
@@ -258,7 +363,7 @@ object OfflineCommandMatcher {
         "notion ရှာ" to Triple("notion_search", "", null),
         "notion ဖတ်" to Triple("notion_get_page_content", "", null),
 
-        // Phase 3: Wireless ADB & Multi-Repo Shortcuts
+        // Phase 3: Wireless ADB, Developer Superpowers & Multi-Repo Shortcuts
         "wifi adb ဖွင့်" to Triple("adb_enable_tcpip", null, "5555"),
         "wireless adb ဖွင့်" to Triple("adb_enable_tcpip", null, "5555"),
         "wireless adb" to Triple("adb_devices_detailed", null, null),
@@ -266,13 +371,45 @@ object OfflineCommandMatcher {
         "android devices" to Triple("adb_devices_detailed", null, null),
         "ဖုန်းချိတ်ဆက်မှုစစ်" to Triple("adb_devices_detailed", null, null),
         "ဖုန်းချိတ်ထားတာဘာရှိလဲ" to Triple("adb_devices_detailed", null, null),
+        "ဖုန်းဘက်ထရီ" to Triple("adb_devices_detailed", null, null),
+        "ဖုန်းအခြေအနေ" to Triple("adb_devices_detailed", null, null),
+        "ဖုန်း crash log စစ်" to Triple("adb_logcat_crash", null, null),
+        "crash log စစ်" to Triple("adb_logcat_crash", null, null),
+        "logcat စစ်" to Triple("adb_logcat_crash", null, null),
+        "ဖုန်း error စစ်" to Triple("adb_logcat_crash", null, null),
+        "phone crash log" to Triple("adb_logcat_crash", null, null),
+        "check logcat" to Triple("adb_logcat_crash", null, null),
+        "ဖုန်း စခရင်ရှော့" to Triple("adb_device_screenshot", null, null),
+        "ဖုန်း စခရင်ရှော့ရိုက်" to Triple("adb_device_screenshot", null, null),
+        "ဖုန်း screenshot" to Triple("adb_device_screenshot", null, null),
+        "phone screenshot" to Triple("adb_device_screenshot", null, null),
+        "git status စစ်" to Triple("git_status", null, null),
+        "git status" to Triple("git_status", null, null),
+        "repo status" to Triple("git_status", null, null),
+        "git အခြေအနေ" to Triple("git_status", null, null),
         "repo အကုန်စစ်" to Triple("git_repo_status_all", null, null),
         "repo အားလုံးစစ်ပေးပါ" to Triple("git_repo_status_all", null, null),
         "git repos" to Triple("git_repo_status_all", null, null),
         "list repos" to Triple("git_repo_status_all", null, null),
         "ပရောဂျက်တွေ စာရင်းပြပါ" to Triple("git_repo_status_all", null, null),
+        "git pull" to Triple("git_pull_repo", null, null),
+        "git pull လုပ်" to Triple("git_pull_repo", null, null),
+        "git push" to Triple("git_push", null, null),
+        "git push လုပ်" to Triple("git_push", null, null),
         "ide status" to Triple("ide_status", null, null),
         "editor အခြေအနေ" to Triple("ide_status", null, null),
+        "vscode ဖွင့်" to Triple("open_in_vscode", null, null),
+        "code ဖွင့်" to Triple("open_in_vscode", null, null),
+        "open in vscode" to Triple("open_in_vscode", null, null),
+        "android studio ဖွင့်" to Triple("open_in_studio", null, null),
+        "open in studio" to Triple("open_in_studio", null, null),
+        "project build လုပ်" to Triple("build_project", null, null),
+        "build စစ်" to Triple("build_project", null, null),
+        "run build" to Triple("build_project", null, null),
+        "build run" to Triple("build_project", null, null),
+        "error ပြင်" to Triple("auto_heal_project", null, null),
+        "auto heal" to Triple("auto_heal_project", null, null),
+        "project ပြင်" to Triple("auto_heal_project", null, null),
 
         // App Shortcuts
         "chrome ဖွင့်" to Triple("open_app", "Chrome", null),
@@ -288,7 +425,6 @@ object OfflineCommandMatcher {
         "notepad ဖွင့်" to Triple("open_app", "Notepad", null),
         "paint ဖွင့်" to Triple("open_app", "Paint", null),
         "task manager ဖွင့်" to Triple("open_app", "Task Manager", null),
-        "android studio ဖွင့်" to Triple("open_app", "Android Studio", null),
         "telegram ဖွင့်" to Triple("open_app", "Telegram", null),
         "spotify ဖွင့်" to Triple("open_app", "Spotify", null),
         "capcut ဖွင့်" to Triple("open_app", "CapCut", null),
@@ -307,6 +443,211 @@ object OfflineCommandMatcher {
         val direct = PHRASES[clean] ?: PHRASES[stripPoliteEnding(clean)]
         if (direct != null) {
             return DesktopCommand(direct.first, direct.second, direct.third)
+        }
+
+        // 0. Dynamic Mouse Actions with Target:
+        // "မောက်စ်နဲ့ <target> ကို နှိပ်", "မောက်ကွန်စာနဲ့ <target> နှိပ်", "မောက်စ်ကို <target> ရွှေ့", "<target> ကို မောက်စ်နဲ့ နှိပ်"
+        val hasMouseWord = clean.contains("မောက်စ်") || clean.contains("မောက်ကွန်စာ") || clean.contains("မောက်ကဆာ") || clean.contains("mouse")
+        if (hasMouseWord) {
+            // Check double click
+            if (clean.contains("နှစ်ချက်နှိပ်") || clean.contains("double click") || clean.contains("ဒဘယ်ကလစ်")) {
+                var target = clean
+                    .replace("မောက်စ်နဲ့", "").replace("မောက်စ်", "")
+                    .replace("မောက်ကွန်စာနဲ့", "").replace("မောက်ကွန်စာ", "")
+                    .replace("မောက်ကဆာနဲ့", "").replace("မောက်ကဆာ", "")
+                    .replace("mouse with", "").replace("mouse", "")
+                    .replace("နှစ်ချက်နှိပ်ပေးပါ", "").replace("နှစ်ချက်နှိပ်ပါ", "").replace("နှစ်ချက်နှိပ်", "")
+                    .replace("double click", "").replace("ဒဘယ်ကလစ်", "")
+                    .replace("ကို", "").replace("မှာ", "").replace("သို့", "")
+                    .trim()
+                target = stripPoliteEnding(target)
+                return DesktopCommand("mouse_double_click", target.ifBlank { null }, null)
+            }
+
+            // Check right click
+            if (clean.contains("ညာဘက်နှိပ်") || clean.contains("ညာကလစ်") || clean.contains("right click") || clean.contains("ရိုက်ကလစ်")) {
+                var target = clean
+                    .replace("မောက်စ်နဲ့", "").replace("မောက်စ်", "")
+                    .replace("မောက်ကွန်စာနဲ့", "").replace("မောက်ကွန်စာ", "")
+                    .replace("မောက်ကဆာနဲ့", "").replace("မောက်ကဆာ", "")
+                    .replace("mouse with", "").replace("mouse", "")
+                    .replace("ညာဘက်နှိပ်ပေးပါ", "").replace("ညာဘက်နှိပ်ပါ", "").replace("ညာဘက်နှိပ်", "")
+                    .replace("ညာကလစ်", "").replace("right click", "").replace("ရိုက်ကလစ်", "")
+                    .replace("ကို", "").replace("မှာ", "").replace("သို့", "")
+                    .trim()
+                target = stripPoliteEnding(target)
+                return DesktopCommand("mouse_right_click", target.ifBlank { null }, null)
+            }
+
+            // Check mouse move
+            if (clean.contains("ရွှေ့") || clean.contains("move") || clean.contains("glide")) {
+                var target = clean
+                    .replace("မောက်စ်ကို", "").replace("မောက်စ်နဲ့", "").replace("မောက်စ်", "")
+                    .replace("မောက်ကွန်စာကို", "").replace("မောက်ကွန်စာနဲ့", "").replace("မောက်ကွန်စာ", "")
+                    .replace("မောက်ကဆာကို", "").replace("မောက်ကဆာနဲ့", "").replace("မောက်ကဆာ", "")
+                    .replace("move mouse to", "").replace("move mouse", "").replace("mouse move", "").replace("mouse", "")
+                    .replace("ရွှေ့ပေးပါ", "").replace("ရွှေ့ပါ", "").replace("ရွှေ့", "")
+                    .replace("move", "").replace("glide", "")
+                    .replace("ကို", "").replace("မှာ", "").replace("သို့", "")
+                    .trim()
+                target = stripPoliteEnding(target)
+                if (target.isNotBlank()) {
+                    return DesktopCommand("mouse_move", target, null)
+                }
+            }
+
+            // Check single click with target
+            if (clean.contains("နှိပ်") || clean.contains("click") || clean.contains("ကလစ်")) {
+                var target = clean
+                    .replace("မောက်စ်နဲ့", "").replace("မောက်စ်ကို", "").replace("မောက်စ်", "")
+                    .replace("မောက်ကွန်စာနဲ့", "").replace("မောက်ကွန်စာကို", "").replace("မောက်ကွန်စာ", "")
+                    .replace("မောက်ကဆာနဲ့", "").replace("မောက်ကဆာကို", "").replace("မောက်ကဆာ", "")
+                    .replace("mouse click", "").replace("click", "").replace("mouse", "")
+                    .replace("နှိပ်ပေးပါ", "").replace("နှိပ်ပါ", "").replace("နှိပ်", "")
+                    .replace("ကလစ်", "")
+                    .replace("ကို", "").replace("မှာ", "").replace("သို့", "")
+                    .trim()
+                target = stripPoliteEnding(target)
+                return DesktopCommand("mouse_click", target.ifBlank { null }, null)
+            }
+        }
+
+        // 1. Dynamic Desktop Icon Toggle: "<app> ဖွင့်ပိတ်", "<app> အိုင်ကွန် ဖွင့်ပိတ်", "<app> icon ဖွင့်ပိတ်"
+        if (clean.contains("ဖွင့်ပိတ်") || clean.contains("toggle")) {
+            val app = clean.replace("အိုင်ကွန် နှိပ်ပြီး ဖွင့်ပိတ်", "")
+                .replace("အိုင်ကွန် နှိပ်ပီး ဖွင့်ပိတ်", "")
+                .replace("အိုင်ကွန် ဖွင့်ပိတ်", "")
+                .replace("icon ဖွင့်ပိတ်", "")
+                .replace("အိုင်ကွန်", "")
+                .replace("icon", "")
+                .replace("ဖွင့်ပိတ်", "")
+                .replace("toggle", "")
+                .trim()
+            if (app.isNotBlank()) {
+                return DesktopCommand("toggle_app", app, null)
+            }
+        }
+
+        // 2. Dynamic Desktop Icon Close: "<app> အိုင်ကွန် နှိပ်ပိတ်", "<app> icon နှိပ်ပိတ်", "<app> အိုင်ကွန် ပိတ်", "<app> icon ပိတ်"
+        if ((clean.contains("icon") || clean.contains("အိုင်ကွန်")) && (clean.contains("ပိတ်") || clean.contains("close") || clean.contains("kill"))) {
+            val app = clean.replace("အိုင်ကွန် နှိပ်ပြီး ပိတ်ပေးပါ", "")
+                .replace("အိုင်ကွန် နှိပ်ပီး ပိတ်ပေးပါ", "")
+                .replace("အိုင်ကွန် နှိပ်ပြီး ပိတ်ပါ", "")
+                .replace("အိုင်ကွန် နှိပ်ပီး ပိတ်ပါ", "")
+                .replace("အိုင်ကွန် နှိပ်ပြီး ပိတ်", "")
+                .replace("အိုင်ကွန် နှိပ်ပီး ပိတ်", "")
+                .replace("အိုင်ကွန် နှိပ်ပိတ်", "")
+                .replace("အိုင်ကွန် ပိတ်ပေးပါ", "")
+                .replace("အိုင်ကွန် ပိတ်ပါ", "")
+                .replace("အိုင်ကွန် ပိတ်", "")
+                .replace("icon နှိပ်ပြီး ပိတ်", "")
+                .replace("icon နှိပ်ပီး ပိတ်", "")
+                .replace("icon နှိပ်ပိတ်", "")
+                .replace("icon ပိတ်", "")
+                .replace("အိုင်ကွန်", "")
+                .replace("icon", "")
+                .replace("ပိတ်", "")
+                .replace("close", "")
+                .replace("kill", "")
+                .trim()
+            if (app.isNotBlank()) {
+                return DesktopCommand("close_desktop_icon", app, null)
+            }
+        }
+
+        // 3. Dynamic Desktop Icon Open: "<app> အိုင်ကွန် နှိပ်ဖွင့်", "<app> icon နှိပ်ဖွင့်", "<app> အိုင်ကွန် ဖွင့်", "<app> icon ဖွင့်", "<app> အိုင်ကွန် နှိပ်"
+        if (clean.contains("icon") || clean.contains("အိုင်ကွန်") || clean.contains("ဒက်စတော့ပေါ်က") || clean.contains("ဒက်စတော့က") || clean.contains("desktop ပေါ်က")) {
+            val app = clean.replace("အိုင်ကွန် နှိပ်ပြီး ဖွင့်ပေးပါ", "")
+                .replace("အိုင်ကွန် နှိပ်ပီး ဖွင့်ပေးပါ", "")
+                .replace("အိုင်ကွန် နှိပ်ပြီး ဖွင့်ပါ", "")
+                .replace("အိုင်ကွန် နှိပ်ပီး ဖွင့်ပါ", "")
+                .replace("အိုင်ကွန် နှိပ်ပြီး ဖွင့်", "")
+                .replace("အိုင်ကွန် နှိပ်ပီး ဖွင့်", "")
+                .replace("အိုင်ကွန် နှိပ်ဖွင့်", "")
+                .replace("အိုင်ကွန် ဖွင့်ပေးပါ", "")
+                .replace("အိုင်ကွန် ဖွင့်ပါ", "")
+                .replace("အိုင်ကွန် ဖွင့်", "")
+                .replace("icon နှိပ်ပြီး ဖွင့်", "")
+                .replace("icon နှိပ်ပီး ဖွင့်", "")
+                .replace("icon နှိပ်ဖွင့်", "")
+                .replace("icon နှိပ်ပေးပါ", "")
+                .replace("icon နှိပ်ပါ", "")
+                .replace("icon နှိပ်", "")
+                .replace("icon ဖွင့်", "")
+                .replace("အိုင်ကွန် နှိပ်ပေးပါ", "")
+                .replace("အိုင်ကွန် နှိပ်ပါ", "")
+                .replace("အိုင်ကွန် နှိပ်", "")
+                .replace("ဒက်စတော့ပေါ်က", "")
+                .replace("ဒက်စတော့က", "")
+                .replace("desktop ပေါ်က", "")
+                .replace("click", "")
+                .replace("icon", "")
+                .replace("အိုင်ကွန်", "")
+                .replace("ဖွင့်ပေးပါ", "")
+                .replace("ဖွင့်ပါ", "")
+                .replace("ဖွင့်", "")
+                .trim()
+            if (app.isNotBlank()) {
+                return DesktopCommand("click_desktop_icon", app, null)
+            }
+        }
+
+        // 3.5. Dynamic Button & UI Element Clicking (e.g. "<target> ခလုတ် နှိပ်", "<target> ခလုတ်နှိပ်ပါ", "click <target> button", "<target> နှိပ်")
+        if (clean.contains("ခလုတ်") || clean.contains("button") || clean.startsWith("click ") || clean.endsWith("နှိပ်") || clean.endsWith("နှိပ်ပါ") || clean.endsWith("နှိပ်ပေးပါ")) {
+            if (!clean.contains("အိုင်ကွန်") && !clean.contains("icon") && !clean.contains("စက်") && !clean.contains("app") && !clean.contains("window") && !clean.contains("tab")) {
+                var target = clean
+                    .replace("ခလုတ်နှိပ်ပေးပါ", "").replace("ခလုတ်နှိပ်ပါ", "").replace("ခလုတ်နှိပ်", "")
+                    .replace("ခလုတ်ကို နှိပ်ပေးပါ", "").replace("ခလုတ်ကို နှိပ်ပါ", "").replace("ခလုတ်ကို နှိပ်", "")
+                    .replace("ခလုတ်", "")
+                    .replace("button click", "").replace("click button", "").replace("button", "")
+                    .replace("click", "")
+                    .replace("နှိပ်ပေးပါ", "").replace("နှိပ်ပါ", "").replace("နှိပ်", "")
+                    .replace("မောက်စ်နဲ့", "").replace("မောက်စ်ကို", "").replace("မောက်စ်", "")
+                    .replace("မောက်ကွန်စာနဲ့", "").replace("မောက်ကွန်စာကို", "").replace("မောက်ကွန်စာ", "")
+                    .replace("မောက်ကဆာနဲ့", "").replace("မောက်ကဆာကို", "").replace("မောက်ကဆာ", "")
+                    .replace("ကို", "").replace("မှာ", "").replace("သို့", "")
+                    .trim()
+                target = stripPoliteEnding(target)
+                if (target.isNotBlank()) {
+                    return DesktopCommand("click_ui_element", target, null)
+                }
+            }
+        }
+
+        // 3.6 Phase 3: Dynamic Developer Shortcuts (Wireless ADB, Git, IDE)
+        // A. Dynamic Wireless ADB connect: "wireless adb 192.168.1.100:5555 ချိတ်", "adb connect 192.168.1.50"
+        val ipPortRegex = Regex("(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}(?::\\d{1,5})?)")
+        if ((clean.contains("adb") || clean.contains("ဖုန်း")) && (clean.contains("ချိတ်") || clean.contains("connect"))) {
+            val ipMatch = ipPortRegex.find(clean)
+            if (ipMatch != null) {
+                return DesktopCommand("adb_connect_wireless", ipMatch.groupValues[1], null)
+            }
+        }
+
+        // B. Dynamic Git Commit: "git commit <message>", "commit <message>"
+        if (clean.startsWith("git commit") || clean.startsWith("commit ")) {
+            val msg = clean.removePrefix("git commit").removePrefix("commit").replace("လုပ်ပါ", "").replace("လုပ်", "").trim()
+            if (msg.isNotBlank()) {
+                return DesktopCommand("git_commit", null, msg)
+            }
+        }
+
+        // C. Dynamic Git Checkout / Branch switch: "branch <name> ပြောင်း", "git checkout <name>"
+        val gitCheckoutMatch = Regex("^(?:git\\s+checkout|checkout)\\s+([a-zA-Z0-9_\\-\\./]+)$", RegexOption.IGNORE_CASE).find(clean)
+            ?: Regex("^branch\\s+([a-zA-Z0-9_\\-\\./]+)\\s+ပြောင်း(?:ပါ)?$", RegexOption.IGNORE_CASE).find(clean)
+        if (gitCheckoutMatch != null) {
+            val branch = gitCheckoutMatch.groupValues[1].trim()
+            if (branch.isNotBlank()) {
+                return DesktopCommand("git_switch_branch", null, branch)
+            }
+        }
+
+        // D. Dynamic Open File in Editor: "code မှာ <file> ဖွင့်", "ide တွင် <file> ဖွင့်"
+        if ((clean.contains("code မှာ") || clean.contains("ide မှာ") || clean.contains("ide တွင်") || clean.startsWith("open in code") || clean.startsWith("open file ")) && clean.contains("ဖွင့်")) {
+            val fileCandidate = clean.replace("code မှာ", "").replace("ide မှာ", "").replace("ide တွင်", "").replace("open in code", "").replace("open file", "").replace("ဖွင့်ပေးပါ", "").replace("ဖွင့်ပါ", "").replace("ဖွင့်", "").trim()
+            if (fileCandidate.isNotBlank()) {
+                return DesktopCommand("ide_open_file", fileCandidate, null)
+            }
         }
 
         // Web Search with Dynamic Query: "google မှာ <query> ရှာပေးပါ", "<query> ရှာပေးပါ", "<query> ရှာပါ"
@@ -367,7 +708,7 @@ object OfflineCommandMatcher {
 
     private fun normalize(input: String): String = input
         .lowercase()
-        .replace(Regex("[၊။,!?.]+"), " ")
+        .replace(Regex("""[၊။,!?]+|(?<=\s|^)\.+|\.+(?=\s|$)"""), " ")
         .replace(Regex("\\s+"), " ")
         .trim()
 

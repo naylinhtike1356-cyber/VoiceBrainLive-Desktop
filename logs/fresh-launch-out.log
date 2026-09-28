@@ -1,0 +1,15 @@
+Reusing configuration cache.
+> Task :desktop:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :desktop:generateComposeResClass SKIPPED
+> Task :desktop:copyNonXmlValueResourcesForMain NO-SOURCE
+> Task :desktop:convertXmlValueResourcesForMain NO-SOURCE
+> Task :desktop:prepareAppResources NO-SOURCE
+> Task :desktop:prepareComposeResourcesTaskForMain NO-SOURCE
+> Task :desktop:generateResourceAccessorsForMain SKIPPED
+> Task :desktop:generateActualResourceCollectorsForMain SKIPPED
+> Task :desktop:assembleMainResources UP-TO-DATE
+> Task :desktop:processResources UP-TO-DATE
+> Task :desktop:compileKotlin UP-TO-DATE
+> Task :desktop:compileJava NO-SOURCE
+> Task :desktop:classes UP-TO-DATE
+> Task :desktop:jar UP-TO-DATE

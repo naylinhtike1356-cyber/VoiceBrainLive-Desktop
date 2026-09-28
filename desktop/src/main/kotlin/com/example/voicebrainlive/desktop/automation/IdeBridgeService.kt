@@ -69,6 +69,40 @@ class IdeBridgeService(
     }
 
     /**
+     * Opens an entire project folder in the specified or auto-detected IDE (VS Code or Android Studio).
+     */
+    fun openProject(projectNameOrPath: String, preferEditor: String = "auto"): ProcessResult {
+        val targetDir = projectResolver.resolveProjectDirectory(projectNameOrPath)
+            ?: File(projectNameOrPath).takeIf { it.exists() && it.isDirectory }
+            ?: return ProcessResult(false, "'$projectNameOrPath' ပရောဂျက်ကို ရှာမတွေ့ပါ။")
+
+        return try {
+            val cmd = when (preferEditor.lowercase()) {
+                "studio", "androidstudio", "android studio" -> {
+                    listOf("studio64.exe", targetDir.absolutePath)
+                }
+                "vscode", "code" -> {
+                    listOf("cmd.exe", "/c", "code", targetDir.absolutePath)
+                }
+                else -> {
+                    val hasAndroidApp = File(targetDir, "app").exists() || File(targetDir, "settings.gradle.kts").exists()
+                    if (hasAndroidApp && isProcessRunning("studio64")) {
+                        listOf("studio64.exe", targetDir.absolutePath)
+                    } else {
+                        listOf("cmd.exe", "/c", "code", targetDir.absolutePath)
+                    }
+                }
+            }
+
+            ProcessBuilder(cmd).start()
+            val editorName = if (cmd.any { it.contains("studio", ignoreCase = true) }) "Android Studio" else "VS Code"
+            ProcessResult(true, "Project '${targetDir.name}' ကို $editorName တွင် ဖွင့်လှစ်လိုက်ပါပြီရှင်။")
+        } catch (e: Exception) {
+            ProcessResult(false, "Project ဖွင့်ရာတွင် အခက်အခဲရှိပါသည်: ${e.message}")
+        }
+    }
+
+    /**
      * Checks currently running IDE processes and workspaces.
      */
     fun getIdeStatus(activeProcessName: String? = null, activeWindowTitle: String? = null): IdeStatus {

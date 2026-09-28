@@ -31,14 +31,15 @@ class GeminiLiveSession(
     modelName: String = DEFAULT_LIVE_MODEL,
     private val voice: String = "Aoede",
     private val allowDesktopTools: Boolean = false,
-    private val systemInstruction: String = """မင်းက VoiceBrainLive Intelligence Partner (အသိဉာဏ်ရှိတဲ့ နည်းပညာ ပါတနာ) ဖြစ်တယ်။ Gemini လို generic AI assistant မျိုးမဟုတ်ဘဲ အသုံးပြုသူရဲ့ ကွန်ပျူတာရှေ့မှာ အမြဲရှိနေပေးပြီး လိုအပ်တာမှန်သမျှ ကူညီပေးမယ့် ရင်းနှီးတဲ့ အဖော်တစ်ယောက်လို နွေးထွေးဖော်ရွေစွာ ပြောဆိုပါ။
+    private val systemInstruction: String = """မင်းက Nilar AI Intelligence Partner (အသိဉာဏ်ရှိတဲ့ နည်းပညာ ပါတနာ) ဖြစ်တယ်။ Gemini လို generic AI assistant မျိုးမဟုတ်ဘဲ အသုံးပြုသူရဲ့ ကွန်ပျူတာရှေ့မှာ အမြဲရှိနေပေးပြီး လိုအပ်တာမှန်သမျှ ကူညီပေးမယ့် ရင်းနှီးတဲ့ အဖော်တစ်ယောက်လို နွေးထွေးဖော်ရွေစွာ ပြောဆိုပါ။
         |
         |PERSONALITY & FAST SPOKEN CONVERSATION (စရိုက်နှင့် အပြန်အလှန် လျင်မြန်စွာ ပြောဆိုဆွေးနွေးခြင်း):
         |- အမြဲတမ်း ဖော်ရွေနွေးထွေးပြီး အားပေးတတ်သူဖြစ်ပါစေ။
-        |- စကားပြောတဲ့အခါ စက်ရုပ်လို မဟုတ်ဘဲ လူသားတစ်ယောက်လို ရင်းရင်းနှီးနှီး ယဉ်ကျေးစွာ ပြောပါ။
-        |- စကားပြောဆို ဆွေးနွေးရာတွင် လိုရင်းတိုရှင်း၊ သဘာဝကျကျ၊ မြန်ဆန်သွက်လက်စွာ ဖြေကြားပါ။ စကားရှည်ကြီးများ မပြောပါနှင့်။
+        |- အသုံးပြုသူက ရှင်းလင်းစွာ မမေးဘဲ သို့မဟုတ် မခိုင်းဘဲနှင့် မလိုအပ်ဘဲ စကားတွေ လျှောက်ပြောခြင်း၊ မေးခွန်းတွေ လျှောက်မေးနေခြင်း လုံးဝ မပြုလုပ်ပါနှင့်။
+        |- အသုံးပြုသူနှင့် အပေးအယူ နားလည်မှုရှိစွာဖြင့် လိုရင်းတိုရှင်း၊ တိကျပြတ်သားစွာသာ တုံ့ပြန်ပါ။
+        |- စကားပြောတဲ့အခါ စက်ရုပ်လို မဟုတ်ဘဲ လူသားတစ်ယောက်လို ရင်းရင်းနှီးနှီး ယဉ်ကျေးစွာ ပြောပါ။ စကားရှည်ကြီးများ မပြောပါနှင့်။
         |- "I am an AI assistant" သို့မဟုတ် "As an AI..." စတဲ့ စကားလုံးတွေကို လုံးဝမသုံးပါနှင့်။
-        |- အသုံးပြုသူကို လေးစားရတဲ့ ပါတနာ/မိတ်ဆွေတစ်ယောက်လို ဆက်ဆံပါ။
+        |- အသုံးပြုသူကို လေးစားရတဲ့ ပါတနာ/မိတ်ဆွေတစ်ယောက်လို ဆက်ဆံပါ။ မခိုင်းပါက တိတ်ဆိတ်စွာ စောင့်ဆိုင်းပါ။
         |- ဒီ conversation မှာ ရှင်းပြပြီးသားအချက်တွေကို မလိုအပ်ဘဲ ထပ်မပြောပါနှင့်။
         |- ခိုင်းစေချက်များရှိပါက tool ကို ချက်ချင်းခေါ်ယူပြီး ရလဒ်ကို လိုရင်းတိုရှင်း အစီရင်ခံပါ။
     """.trimMargin(),
@@ -61,22 +62,27 @@ class GeminiLiveSession(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val client = OkHttpClient.Builder()
         .protocols(listOf(okhttp3.Protocol.HTTP_1_1))
-        // Give the Live server enough time to complete setup and avoid
-        // false ping failures during a slow native-audio handshake.
-        .pingInterval(30, TimeUnit.SECONDS)
-        .connectTimeout(20, TimeUnit.SECONDS)
+        // Set timeouts to 0 (infinite) for bidirectional WebSocket streaming.
+        // Google Gemini Live WebSocket does not support standard WS ping frames;
+        // keeping pingInterval=0 prevents false pong timeouts.
+        .pingInterval(0, TimeUnit.MILLISECONDS)
+        .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS)
-        .writeTimeout(15, TimeUnit.SECONDS)
+        .writeTimeout(0, TimeUnit.MILLISECONDS)
         .build()
 
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
     @Volatile private var connected = false
+    @Volatile private var userDisconnectRequested = false
     private var webSocket: WebSocket? = null
     @Volatile private var setupCompleteReceived = false
     @Volatile private var setupSignal = CompletableDeferred<Unit>()
     private val audioBuffer = ByteArrayOutputStream()
     private val restChatHistory = mutableListOf<JSONObject>()
     private val liveTurnText = StringBuilder()
+    private val sentAudioChunks = java.util.concurrent.atomic.AtomicLong(0)
+    private val failedAudioSends = java.util.concurrent.atomic.AtomicLong(0)
+    private val receivedAudioChunks = java.util.concurrent.atomic.AtomicLong(0)
 
     private val restFallbackModels = listOf(
         "gemini-3-flash-preview",
@@ -99,6 +105,7 @@ class GeminiLiveSession(
         val wsUrl = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=$apiKey"
         val request = Request.Builder().url(wsUrl).build()
 
+        userDisconnectRequested = false
         setupCompleteReceived = false
         connected = false
         setupSignal = CompletableDeferred()
@@ -133,9 +140,10 @@ class GeminiLiveSession(
                 setupCompleteReceived = false
                 setupSignal.completeExceptionally(IllegalStateException("Live socket closed: $code $reason"))
                 val raw = "Closed: $code - $reason"
-                if (code != 1000) {
+                if (code != 1000 && !userDisconnectRequested) {
                     checkAndTriggerModelFallback(raw)
-                    onStatus("Disconnected ($code)")
+                    DesktopLogger.warn("Unexpected WebSocket close ($code: $reason), signaling auto-reconnect")
+                    onStatus("အင်တာနက် အခြေအနေကြောင့် ပြန်လည်ချိတ်ဆက်နေပါသည်… ($code)")
                 } else {
                     onStatus("Disconnected")
                 }
@@ -150,11 +158,15 @@ class GeminiLiveSession(
                 checkAndTriggerModelFallback(raw)
                 val httpDetail = response?.code?.let { " HTTP $it" }.orEmpty()
                 DesktopLogger.warn("Gemini Live WebSocket failure model=$model$httpDetail: $raw")
-                onStatus("Live ချိတ်ဆက်မှု မအောင်မြင်ပါ$httpDetail — native voice မရနိုင်သေးပါ")
+                if (!userDisconnectRequested) {
+                    onStatus("အင်တာနက် ပြန်လည်ချိတ်ဆက်နေပါသည်…")
+                } else {
+                    onStatus("Live ချိတ်ဆက်မှု မအောင်မြင်ပါ$httpDetail — native voice မရနိုင်သေးပါ")
+                }
             }
         })
 
-        val ready = withTimeoutOrNull(20_000L) { setupSignal.await() } != null
+        val ready = withTimeoutOrNull(45_000L) { setupSignal.await() } != null
         if (!ready) {
             webSocket?.cancel()
             webSocket = null
@@ -231,7 +243,7 @@ class GeminiLiveSession(
             })
         }
         val setupStr = setup.toString()
-        DesktopLogger.info("Gemini Live Setup sent: $setupStr")
+        DesktopLogger.info("Gemini Live setup sent model=$model bytes=${setupStr.toByteArray(Charsets.UTF_8).size} tools=$allowDesktopTools")
         ws.send(setupStr)
     }
 
@@ -247,7 +259,17 @@ class GeminiLiveSession(
                     })
                 })
             }
-            return ws.send(realtimeInput.toString())
+            val sent = ws.send(realtimeInput.toString())
+            if (sent) {
+                val sentCount = sentAudioChunks.incrementAndGet()
+                if (sentCount == 1L || sentCount % 50L == 0L) {
+                    DesktopLogger.info("Live audio telemetry: sent=$sentCount failed=${failedAudioSends.get()} ready=true")
+                }
+            } else {
+                failedAudioSends.incrementAndGet()
+                DesktopLogger.warn("Live audio telemetry: ws.send() returned false (buffer full or closing)")
+            }
+            return sent
         } else {
             synchronized(audioBuffer) {
                 runCatching {
@@ -273,7 +295,6 @@ class GeminiLiveSession(
 
         val ws = webSocket
         if (ws != null && setupCompleteReceived) {
-            onStatus("Live Audio မေးမြန်းနေပါတယ်…")
             val audioStreamEnd = JSONObject().apply {
                 put("realtimeInput", JSONObject().apply {
                     put("audioStreamEnd", true)
@@ -297,6 +318,26 @@ class GeminiLiveSession(
         }
         onInputTranscript(text)
 
+        sendClientText(text)
+    }
+
+    override suspend fun sendAssistantPrompt(text: String): Result<Unit> = withContext(Dispatchers.IO) {
+        if (apiKey.isBlank()) {
+            onStatus("GEMINI_API_KEY မထည့်ရသေးပါ")
+            return@withContext Result.failure(IllegalStateException("GEMINI_API_KEY is missing"))
+        }
+
+        DesktopLogger.info("Sending assistant greeting prompt; liveReady=${isLiveReady()}")
+        val result = sendClientText(text)
+        if (result.isFailure) {
+            DesktopLogger.warn("Assistant greeting prompt failed: ${result.exceptionOrNull()?.message ?: "unknown error"}")
+        }
+        result
+    }
+
+    private suspend fun sendClientText(text: String): Result<Unit> {
+        if (text.isBlank()) return Result.success(Unit)
+
         val ws = webSocket
         if (ws != null && setupCompleteReceived) {
             onStatus("Gemini Live သို့ ပို့နေပါတယ်…")
@@ -314,11 +355,11 @@ class GeminiLiveSession(
                 })
             }
             val sent = ws.send(clientContent.toString())
-            if (sent) return@withContext Result.success(Unit)
+            if (sent) return Result.success(Unit)
         }
 
         // Reliable Multi-Turn REST Fallback
-        return@withContext executeRestChat(text)
+        return executeRestChat(text)
     }
 
     private fun executeGenerateContent(requestBodyJson: JSONObject): Pair<Int, String> {
@@ -404,69 +445,93 @@ class GeminiLiveSession(
                 return@runCatching
             }
 
-            val firstCandidate = candidates.getJSONObject(0)
-            val content = firstCandidate.optJSONObject("content")
-            val parts = content?.optJSONArray("parts")
-
+            var currentResponseCandidate = candidates.getJSONObject(0)
+            var recursionCount = 0
+            val maxRecursion = 6
             var assistantText = ""
 
-            if (parts != null) {
+            while (recursionCount < maxRecursion) {
+                recursionCount++
+                val content = currentResponseCandidate.optJSONObject("content")
+                val parts = content?.optJSONArray("parts") ?: break
+
+                var hasFunctionCall = false
+                val functionCalls = mutableListOf<JSONObject>()
+                var turnText = ""
+
                 for (i in 0 until parts.length()) {
                     val p = parts.getJSONObject(i)
                     if (p.has("text")) {
-                        assistantText += p.getString("text")
+                        turnText += p.getString("text")
                     }
                     if (p.has("functionCall")) {
-                        val fc = p.getJSONObject("functionCall")
-                        val callId = "call_${System.currentTimeMillis()}_$i"
-                        val args = fc.optJSONObject("args")
-                        val cmdType = args?.optString("command_type")?.takeIf { it.isNotBlank() } ?: fc.optString("name")
-                        val target = args?.optString("target")?.takeIf { it.isNotBlank() }
-                        val value = args?.optString("value")?.takeIf { it.isNotBlank() }
-
-                        onToolCall(callId, cmdType, target, value)
-
-                        if (onExecuteToolDirect != null) {
-                            val toolResult = onExecuteToolDirect.invoke(cmdType, target, value)
-                            val modelTurn = JSONObject().apply {
-                                put("role", "model")
-                                put("parts", JSONArray().apply { put(p) })
-                            }
-                            restChatHistory.add(modelTurn)
-
-                            val funcResponseTurn = JSONObject().apply {
-                                put("role", "user")
-                                put("parts", JSONArray().apply {
-                                    put(JSONObject().apply {
-                                        put("functionResponse", JSONObject().apply {
-                                            put("name", "execute_desktop_command")
-                                            put("response", JSONObject().apply {
-                                                put("result", toolResult)
-                                            })
-                                        })
-                                    })
-                                })
-                            }
-                            restChatHistory.add(funcResponseTurn)
-
-                            val followUpReqJson = JSONObject().apply {
-                                put("systemInstruction", JSONObject().apply {
-                                    put("parts", JSONArray().apply { put(JSONObject().apply { put("text", systemInstruction) }) })
-                                })
-                                put("contents", JSONArray(restChatHistory.map { JSONObject(it.toString()) }))
-                            }
-                            val (fuCode, followUpBody) = executeGenerateContent(followUpReqJson)
-                            if (fuCode in 200..299) {
-                                val fuJson = JSONObject(followUpBody)
-                                val fuCandidate = fuJson.optJSONArray("candidates")?.optJSONObject(0)
-                                val fuParts = fuCandidate?.optJSONObject("content")?.optJSONArray("parts")
-                                val fuText = fuParts?.optJSONObject(0)?.optString("text")
-                                if (!fuText.isNullOrBlank()) {
-                                    assistantText = fuText
-                                }
-                            }
-                        }
+                        hasFunctionCall = true
+                        functionCalls.add(p)
                     }
+                }
+
+                if (turnText.isNotBlank()) {
+                    assistantText = turnText
+                }
+
+                if (!hasFunctionCall || onExecuteToolDirect == null) {
+                    break
+                }
+
+                val modelTurn = JSONObject().apply {
+                    put("role", "model")
+                    put("parts", parts)
+                }
+                restChatHistory.add(modelTurn)
+
+                val functionResponseParts = JSONArray()
+                for ((idx, fcPart) in functionCalls.withIndex()) {
+                    val fc = fcPart.getJSONObject("functionCall")
+                    val callId = "call_${System.currentTimeMillis()}_$idx"
+                    val args = fc.optJSONObject("args")
+                    val cmdType = args?.optString("command_type")?.takeIf { it.isNotBlank() } ?: fc.optString("name")
+                    val target = args?.optString("target")?.takeIf { it.isNotBlank() }
+                    val value = args?.optString("value")?.takeIf { it.isNotBlank() }
+
+                    onToolCall(callId, cmdType, target, value)
+                    val toolResult = onExecuteToolDirect.invoke(cmdType, target, value)
+
+                    functionResponseParts.put(JSONObject().apply {
+                        put("functionResponse", JSONObject().apply {
+                            put("name", "execute_desktop_command")
+                            put("response", JSONObject().apply {
+                                put("result", toolResult)
+                            })
+                        })
+                    })
+                }
+
+                val funcResponseTurn = JSONObject().apply {
+                    put("role", "user")
+                    put("parts", functionResponseParts)
+                }
+                restChatHistory.add(funcResponseTurn)
+
+                val followUpReqJson = JSONObject().apply {
+                    put("systemInstruction", JSONObject().apply {
+                        put("parts", JSONArray().apply { put(JSONObject().apply { put("text", systemInstruction) }) })
+                    })
+                    put("contents", JSONArray(restChatHistory.map { JSONObject(it.toString()) }))
+                    if (allowDesktopTools) put("tools", desktopTools())
+                }
+
+                val (fuCode, followUpBody) = executeGenerateContent(followUpReqJson)
+                if (fuCode !in 200..299) {
+                    DesktopLogger.warn("Chained tool follow-up generation failed: HTTP $fuCode")
+                    break
+                }
+
+                val fuJson = JSONObject(followUpBody)
+                val nextCandidate = fuJson.optJSONArray("candidates")?.optJSONObject(0)
+                if (nextCandidate != null) {
+                    currentResponseCandidate = nextCandidate
+                } else {
+                    break
                 }
             }
 
@@ -814,6 +879,10 @@ class GeminiLiveSession(
                         val base64Audio = inlineData.getString("data")
                         if (base64Audio.isNotEmpty()) {
                             onAudioResponse(base64Audio)
+                            val audioCount = receivedAudioChunks.incrementAndGet()
+                            if (audioCount == 1L || audioCount % 20L == 0L) {
+                                DesktopLogger.info("Live audio telemetry: modelAudioChunks=$audioCount")
+                            }
                         }
                     }
                     if (part.has("text") && !part.optBoolean("thought", false)) {
@@ -845,6 +914,7 @@ class GeminiLiveSession(
 
             val isTurnComplete = serverContent.optBoolean("turnComplete", false) || serverContent.optBoolean("turn_complete", false)
             if (isTurnComplete) {
+                DesktopLogger.info("Live audio telemetry: serverTurnComplete=true sent=$sentAudioChunks modelAudio=$receivedAudioChunks")
                 synchronized(liveTurnText) { liveTurnText.setLength(0) }
                 onTurnComplete()
             }
@@ -871,6 +941,7 @@ class GeminiLiveSession(
     override fun isLiveReady(): Boolean = connected && setupCompleteReceived && webSocket != null
 
     override fun disconnect() {
+        userDisconnectRequested = true
         connected = false
         webSocket?.close(1000, "User disconnect")
         webSocket = null
@@ -909,19 +980,26 @@ class GeminiLiveSession(
 
     private fun desktopTools(): JSONArray {
         val commandTypes = arrayOf(
+            "mouse_click", "mouse_double_click", "mouse_right_click", "mouse_move", "mouse_scroll", "mouse_drag",
+            "click_ui_element", "inspect_window_ui", "snap_window_left", "snap_window_right", "snap_window_up", "snap_window_down", "new_tab", "switch_tab",
+            "click_desktop_icon", "close_desktop_icon", "toggle_app", "click_normalized", "show_desktop", "type_text_physical", "screen_eyes", "refresh_app_catalog",
             "open_app", "close_app", "search_web", "search_youtube", "search_files", "find_file", "open_file", "open_url",
             "open_folder", "open_downloads", "open_documents", "open_desktop", "open_recycle_bin", "empty_recycle_bin",
             "get_current_time", "get_current_date", "open_settings", "open_network_settings", "open_bluetooth_settings",
             "open_display_settings", "open_sound_settings", "take_screenshot", "volume_up", "volume_down", "mute",
             "lock_computer", "shutdown", "restart", "sleep", "system_status", "get_system_info", "diagnose_network",
             "get_battery_status", "list_running_apps", "copy_to_clipboard", "run_powershell_safe", "refresh_file_index",
-            "get_active_window", "solve_project_issue", "auto_heal_project", "launch_coding_agent", "run_android_build_test",
-            "verify_app_on_emulator", "git_commit_fix", "check_adb_devices", "notion_test", "notion_search",
-            "notion_get_page_content", "notion_create_page", "notion_add_note", "notion_create_task", "notion_append_note",
-            "notion_append_to_page", "notion_update_page_title", "notion_archive_page", "notion_delete_page", "notion_delete_block",
-            "open_notion_page", "remember_user_fact", "get_user_memory", "run_work_macro", "switch_user_profile", "analyze_screen",
-            "read_clipboard", "media_play_pause", "media_next", "media_prev", "minimize_all", "maximize_window", "minimize_window",
-            "close_window", "close_tab", "brightness_up", "brightness_down"
+            "get_active_window", "ide_open_file", "ide_open_project", "open_in_vscode", "open_in_studio", "ide_status",
+            "adb_enable_tcpip", "adb_connect_wireless", "adb_pair_wireless", "adb_devices_detailed", "adb_logcat_crash",
+            "adb_device_screenshot", "adb_install_apk", "git_status", "git_repo_status_all", "git_switch_branch",
+            "git_pull_repo", "git_commit", "git_push", "build_project", "solve_project_issue", "auto_heal_project",
+            "launch_coding_agent", "run_android_build_test", "verify_app_on_emulator", "git_commit_fix", "check_adb_devices",
+            "notion_test", "notion_search", "notion_get_page_content", "notion_create_page", "notion_add_note", "notion_create_task",
+            "notion_append_note", "notion_append_to_page", "notion_update_page_title", "notion_archive_page", "notion_delete_page",
+            "notion_delete_block", "open_notion_page", "remember_user_fact", "get_user_memory", "run_work_macro", "switch_user_profile",
+            "analyze_screen", "read_clipboard", "media_play_pause", "media_next", "media_prev", "minimize_all", "maximize_window",
+            "minimize_window", "close_window", "close_tab", "brightness_up", "brightness_down",
+            "execute_goal", "chain_commands", "cancel_goal"
         )
         val properties = JSONObject()
             .put("command_type", JSONObject().put("type", "string").put("enum", JSONArray(commandTypes.toList())).put("description", "Choose exactly one action from the enum. Do not call a tool for ordinary conversation."))

@@ -32,12 +32,12 @@ compose.desktop {
 
         nativeDistributions {
             targetFormats(TargetFormat.Exe, TargetFormat.Msi)
-            packageName = "VoiceBrainLive"
+            packageName = "NilarAI"
             packageVersion = "1.0.0"
-            description = "VoiceBrainLive Windows Desktop Assistant"
-            vendor = "VoiceBrainLive"
+            description = "Nilar AI — Burmese Voice Assistant"
+            vendor = "Nilar AI"
             windows {
-                iconFile.set(project.file("src/main/resources/voicebrain_robot.ico"))
+                iconFile.set(project.file("src/main/resources/nilar_ai_logo.ico"))
             }
         }
     }

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.example.voicebrainlive.desktop.automation.ProjectAutomationTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-09-28T00:17:13.386Z" hostname="NAYLIN" time="0.081">
+  <properties/>
+  <testcase name="testAntigravityBridgeDispatchesTaskFile" classname="com.example.voicebrainlive.desktop.automation.ProjectAutomationTest" time="0.069"/>
+  <testcase name="testCodingTaskFormatterGeneratesPrompt" classname="com.example.voicebrainlive.desktop.automation.ProjectAutomationTest" time="0.002"/>
+  <testcase name="testProjectResolverFindsCurrentProject" classname="com.example.voicebrainlive.desktop.automation.ProjectAutomationTest" time="0.007"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

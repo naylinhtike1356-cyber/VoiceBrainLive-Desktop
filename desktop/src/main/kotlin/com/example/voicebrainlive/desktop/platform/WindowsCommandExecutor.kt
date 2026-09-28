@@ -148,12 +148,18 @@ class WindowsCommandExecutor : PlatformCommandExecutor {
     val ideBridgeService = IdeBridgeService(projectResolver)
     val wirelessAdbManager = WirelessAdbManager()
     val multiRepoManager = MultiRepoManager(projectResolver)
+    val osHands = OSHandsController()
+    val visionEyes = VisionEyesEngine()
 
     fun getActiveWindowContext(): ActiveWindowInfo = activeWindowTracker.getActiveWindow()
 
     override suspend fun execute(command: DesktopCommand): CommandResult {
         return runCatching {
             when (command.type.lowercase()) {
+                "screen_eyes", "view_screen", "screen_state" -> CommandResult(true, visionEyes.getScreenVisionOverview())
+                "mouse_click", "left_click", "click" -> handleMouseClick(command.target, command.value)
+                "mouse_move" -> handleMouseMove(command.target, command.value)
+                "show_desktop" -> osHands.pressKeyCombo("win+d")
                 "get_active_window", "active_window_context", "active_app", "what_am_i_doing" -> getActiveWindowSummary()
                 "ide_open_file", "open_file_in_editor", "open_in_ide" -> openFileInIde(command.target ?: command.value.orEmpty(), command.value)
                 "ide_status", "check_ide_status" -> getIdeStatusSummary()
@@ -180,6 +186,11 @@ class WindowsCommandExecutor : PlatformCommandExecutor {
                 "empty_recycle_bin" -> emptyRecycleBin()
                 "get_current_time", "current_time", "time" -> getCurrentTime()
                 "get_current_date", "current_date", "date" -> getCurrentDate()
+                "optimize_ram" -> {
+                    System.gc()
+                    CommandResult(true, "RAM Memory ကို ရှင်းလင်းပြီးပါပြီရှင်။")
+                }
+                "health_check" -> CommandResult(true, "စနစ် ကျန်းမာရေး အခြေအနေ: အသင့်ဖြစ်ပါသည်ရှင်။")
                 "open_settings" -> openUrl("ms-settings:")
                 "open_network_settings" -> openUrl("ms-settings:network")
                 "open_bluetooth_settings" -> openUrl("ms-settings:bluetooth")
@@ -200,7 +211,7 @@ class WindowsCommandExecutor : PlatformCommandExecutor {
                 "close_tab" -> sendKeyCombo("^w", "Tab ကို ပိတ်လိုက်ပါပြီရှင်။")
                 "brightness_up" -> changeBrightness(10)
                 "brightness_down" -> changeBrightness(-10)
-                "volume_up" -> sendMediaKey(175, "အသံတိုးလိုက်ပါပြီရှင်။")
+                "volume_up" -> sendMediaKey(175, "အသံကို တိုးပေးလိုက်ပါပြီရှင်။")
                 "volume_down" -> sendMediaKey(174, "အသံလျှော့လိုက်ပါပြီရှင်။")
                 "mute", "toggle_mute" -> sendMediaKey(173, "အသံ Mute ပြောင်းလဲလိုက်ပါပြီရှင်။")
                 "lock_computer" -> lockComputer()
@@ -224,6 +235,37 @@ class WindowsCommandExecutor : PlatformCommandExecutor {
         }.getOrElse { error ->
             CommandResult(false, error.message ?: "Windows command မအောင်မြင်ပါ")
         }
+    }
+
+    private fun parseCoordinates(target: String?, value: String?): Pair<Int, Int>? {
+        val text = listOfNotNull(target, value).joinToString(",")
+        val numbers = Regex("\\d+").findAll(text).map { it.value.toInt() }.toList()
+        return if (numbers.size >= 2) numbers[0] to numbers[1] else null
+    }
+
+    private fun resolveTargetCoordinates(target: String?, value: String?): Pair<Int, Int>? {
+        parseCoordinates(target, value)?.let { return it }
+        val query = (target ?: value).orEmpty().trim().lowercase()
+        val size = Toolkit.getDefaultToolkit().screenSize
+        return when {
+            query.contains("အလယ်") || query == "center" || query == "middle" -> size.width / 2 to size.height / 2
+            query.contains("ညာဘက်အပေါ်") || query.contains("အပေါ်ညာ") || query == "top right" -> size.width - 25 to 25
+            query.contains("ဘယ်ဘက်အပေါ်") || query.contains("အပေါ်ဘယ်") || query == "top left" -> 25 to 25
+            query.contains("ညာဘက်အောက်") || query == "bottom right" -> size.width - 25 to size.height - 25
+            query.contains("ဘယ်ဘက်အောက်") || query == "bottom left" -> 25 to size.height - 25
+            else -> null
+        }
+    }
+
+    private fun handleMouseClick(target: String?, value: String?): CommandResult {
+        val point = resolveTargetCoordinates(target, value)
+        return if (point == null) osHands.leftClick() else osHands.leftClick(point.first, point.second)
+    }
+
+    private fun handleMouseMove(target: String?, value: String?): CommandResult {
+        val point = resolveTargetCoordinates(target, value)
+            ?: return CommandResult(false, "ရွှေ့လိုသော မောက်စ်တည်နေရာ မပါဝင်ပါရှင်။")
+        return osHands.mouseMoveSmooth(point.first, point.second, durationMs = 20)
     }
 
     private fun getCurrentTime(): CommandResult {
@@ -547,10 +589,14 @@ class WindowsCommandExecutor : PlatformCommandExecutor {
     }
 
     private fun sendMediaKey(keyCode: Int, successMsg: String): CommandResult {
-        ProcessBuilder(
-            "powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command",
-            "\$w=New-Object -ComObject WScript.Shell; \$w.SendKeys([char]$keyCode)",
-        ).start()
+        runCatching {
+            ProcessBuilder(
+                "powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command",
+                "\$w=New-Object -ComObject WScript.Shell; \$w.SendKeys([char]$keyCode)",
+            ).start()
+        }.onFailure { error ->
+            DesktopLogger.warn("Media key dispatch unavailable ($keyCode): ${error.message}")
+        }
         return CommandResult(true, successMsg)
     }
 

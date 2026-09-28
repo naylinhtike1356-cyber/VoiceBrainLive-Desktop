@@ -180,8 +180,9 @@ fun FloatingRobotWindow(
                 },
             contentAlignment = Alignment.Center,
         ) {
+            val isGoalRunning = state.activeGoal?.status == com.example.voicebrainlive.desktop.core.GoalStatus.EXECUTING
             ThreeDRobot(
-                phase = state.phase,
+                phase = if (isGoalRunning && state.phase == AssistantPhase.READY) AssistantPhase.THINKING else state.phase,
                 listening = state.isListening,
                 visualSize = robotVisualSize,
                 liveVolume = liveVolume,

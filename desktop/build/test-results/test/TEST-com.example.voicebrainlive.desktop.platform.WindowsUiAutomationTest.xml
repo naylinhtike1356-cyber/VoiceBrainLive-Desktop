@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.example.voicebrainlive.desktop.platform.WindowsUiAutomationTest" tests="2" skipped="0" failures="0" errors="0" timestamp="2026-09-28T00:17:50.250Z" hostname="NAYLIN" time="0.007">
+  <properties/>
+  <testcase name="testDpiCoordinateConversionDoesNotThrow" classname="com.example.voicebrainlive.desktop.platform.WindowsUiAutomationTest" time="0.002"/>
+  <testcase name="testResolveQueryCandidatesForBurmeseSynonyms" classname="com.example.voicebrainlive.desktop.platform.WindowsUiAutomationTest" time="0.005"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

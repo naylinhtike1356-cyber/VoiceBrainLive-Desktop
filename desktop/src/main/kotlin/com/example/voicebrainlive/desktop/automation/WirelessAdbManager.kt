@@ -1,5 +1,7 @@
 package com.example.voicebrainlive.desktop.automation
 
+import java.io.File
+import java.io.FileOutputStream
 import java.util.concurrent.TimeUnit
 
 data class AdbDeviceInfo(
@@ -162,5 +164,95 @@ class WirelessAdbManager {
                 if (!d.wifiIp.isNullOrBlank()) appendLine("  - Wi-Fi IP: ${d.wifiIp}")
             }
         }.trim()
+    }
+
+    /**
+     * Inspects recent Android crash logs, fatal exceptions, or system errors from connected device.
+     */
+    fun getRecentLogcatErrors(deviceId: String? = null, maxLines: Int = 25): ProcessResult {
+        return runCatching {
+            val cmd = mutableListOf("adb")
+            if (!deviceId.isNullOrBlank()) {
+                cmd.addAll(listOf("-s", deviceId.trim()))
+            }
+            // 1. Try crash buffer first
+            val crashCmd = cmd.toMutableList().apply { addAll(listOf("logcat", "-d", "-b", "crash")) }
+            val procCrash = ProcessBuilder(crashCmd).redirectErrorStream(true).start()
+            val crashOut = procCrash.inputStream.bufferedReader().readText().trim()
+            procCrash.waitFor(5, TimeUnit.SECONDS)
+
+            if (crashOut.isNotBlank() && !crashOut.contains("--------- beginning of crash") || crashOut.length > 50) {
+                val lines = crashOut.lines().takeLast(maxLines).joinToString("\n")
+                return ProcessResult(true, "📱 Android Crash Log (မကြာမီဖြစ်ပွားခဲ့သော Error များ):\n```\n$lines\n```")
+            }
+
+            // 2. Fallback to recent Error logs (*:E)
+            val errorCmd = cmd.toMutableList().apply { addAll(listOf("logcat", "-d", "-t", "80", "*:E")) }
+            val procErr = ProcessBuilder(errorCmd).redirectErrorStream(true).start()
+            val errOut = procErr.inputStream.bufferedReader().readText().trim()
+            procErr.waitFor(5, TimeUnit.SECONDS)
+
+            if (errOut.isNotBlank()) {
+                val filtered = errOut.lines()
+                    .filter { it.contains("FATAL", ignoreCase = true) || it.contains("Exception", ignoreCase = true) || it.contains("Error", ignoreCase = true) }
+                    .takeLast(maxLines)
+                    .joinToString("\n")
+
+                if (filtered.isNotBlank()) {
+                    return ProcessResult(true, "📱 Android Error Logs:\n```\n$filtered\n```")
+                }
+            }
+
+            ProcessResult(true, "Device တွင် မကြာသေးမီက ဖြစ်ပွားခဲ့သော Crash သို့မဟုတ် Fatal Exception မတွေ့ရှိပါရှင် (System ပုံမှန် အလုပ်လုပ်နေပါသည်)။")
+        }.getOrElse {
+            ProcessResult(false, "Logcat ရယူရာတွင် အခက်အခဲရှိပါသည်: ${it.message}")
+        }
+    }
+
+    /**
+     * Captures a screenshot from the active Android device and saves it locally.
+     */
+    fun captureDeviceScreenshot(outputFile: File? = null): ProcessResult {
+        return runCatching {
+            val targetFile = outputFile ?: File(System.getenv("APPDATA") ?: System.getProperty("user.home"), "VoiceBrainLive\\screenshots\\phone_screen.png")
+            targetFile.parentFile?.mkdirs()
+
+            val proc = ProcessBuilder("adb", "exec-out", "screencap", "-p").start()
+            val bytes = proc.inputStream.readBytes()
+            proc.waitFor(8, TimeUnit.SECONDS)
+
+            if (bytes.size > 1024) {
+                FileOutputStream(targetFile).use { it.write(bytes) }
+                ProcessResult(true, "Android Screen Screenshot ကို '${targetFile.name}' သို့ သိမ်းဆည်းလိုက်ပါပြီရှင် (${targetFile.absolutePath})။")
+            } else {
+                ProcessResult(false, "Screenshot ဖမ်းယူ၍ မရပါ (Device မချိတ်ဆက်ထားပါ သို့မဟုတ် Screen Off ဖြစ်နေပါသည်)။")
+            }
+        }.getOrElse {
+            ProcessResult(false, "Android Screenshot ဖမ်းယူရာတွင် အခက်အခဲရှိပါသည်: ${it.message}")
+        }
+    }
+
+    /**
+     * Installs an APK file onto the connected Android device.
+     */
+    fun installApk(apkPath: String): ProcessResult {
+        val file = File(apkPath.trim())
+        if (!file.exists() || !file.name.endsWith(".apk", ignoreCase = true)) {
+            return ProcessResult(false, "မှန်ကန်သော APK ဖိုင် ရှာမတွေ့ပါ: ${file.absolutePath}")
+        }
+
+        return runCatching {
+            val proc = ProcessBuilder("adb", "install", "-r", file.absolutePath).redirectErrorStream(true).start()
+            val out = proc.inputStream.bufferedReader().readText().trim()
+            proc.waitFor(60, TimeUnit.SECONDS)
+
+            if (out.contains("Success", ignoreCase = true)) {
+                ProcessResult(true, "APK '${file.name}' ကို Android Device ပေါ်သို့ အောင်မြင်စွာ Install ပြုလုပ်ပြီးပါပြီရှင်။")
+            } else {
+                ProcessResult(false, "APK Install မအောင်မြင်ပါ: $out")
+            }
+        }.getOrElse {
+            ProcessResult(false, "APK Install ပြုလုပ်ရာတွင် အခက်အခဲရှိပါသည်: ${it.message}")
+        }
     }
 }

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.example.voicebrainlive.desktop.core.VoiceResponsePolicyTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-09-28T00:17:17.292Z" hostname="NAYLIN" time="0.006">
+  <properties/>
+  <testcase name="text fallback avoids duplicate speech after native audio" classname="com.example.voicebrainlive.desktop.core.VoiceResponsePolicyTest" time="0.003"/>
+  <testcase name="native live mode never needs a text speech fallback" classname="com.example.voicebrainlive.desktop.core.VoiceResponsePolicyTest" time="0.0"/>
+  <testcase name="blank text is never sent to the speech fallback" classname="com.example.voicebrainlive.desktop.core.VoiceResponsePolicyTest" time="0.0"/>
+  <testcase name="text fallback remains enabled when a live turn has no audio" classname="com.example.voicebrainlive.desktop.core.VoiceResponsePolicyTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
