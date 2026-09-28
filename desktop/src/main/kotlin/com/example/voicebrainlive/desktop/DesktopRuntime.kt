@@ -45,6 +45,19 @@ class DesktopRuntime(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val _liveVolumeLevel = MutableStateFlow(0f)
     val liveVolumeLevel: StateFlow<Float> = _liveVolumeLevel.asStateFlow()
+    /**
+     * Session health for honest UI: updated from session.isLiveReady() on
+     * every HealthWatchdog tick. While listening with an unhealthy session
+     * the status pill is forced to the reconnecting state.
+     */
+    private val _sessionHealthy = MutableStateFlow(true)
+    val sessionHealthy: StateFlow<Boolean> = _sessionHealthy.asStateFlow()
+    /**
+     * True when the mic level has stayed near zero for ~2.5s while listening.
+     * Drives the flat-gray honest waveform + input-device hint.
+     */
+    private val _micSilentWhileListening = MutableStateFlow(false)
+    val micSilentWhileListening: StateFlow<Boolean> = _micSilentWhileListening.asStateFlow()
     private val _voiceTypingMode = MutableStateFlow(false)
     val voiceTypingMode: StateFlow<Boolean> = _voiceTypingMode.asStateFlow()
     private val _commandModeRequest = MutableStateFlow(0L)
@@ -73,7 +86,8 @@ class DesktopRuntime(
         onSafeStateReset = { msg ->
             controller.updateStatus(msg)
             controller.updatePhase(AssistantPhase.READY)
-        }
+        },
+        onLivenessTick = { healthy -> _sessionHealthy.value = healthy },
     )
     private val _showNeuralBrainRequest = MutableStateFlow(0L)
     val showNeuralBrainRequest: StateFlow<Long> = _showNeuralBrainRequest.asStateFlow()
@@ -100,6 +114,16 @@ class DesktopRuntime(
 
     /** Throttles the periodic rolling audio-latency telemetry log (no audio contents). */
     @Volatile private var lastLatencyReportLogMs = 0L
+    /** Consecutive sendAudioChunk() failures (not-ready or ws.send()==false). */
+    @Volatile private var consecutiveAudioSendFailures = 0
+    @Volatile private var audioSendStallWarned = false
+    /** Last uplink audio timestamp; the liveness monitor reconnects when audio
+     * flows but the server stays silent. */
+    @Volatile private var lastUplinkAudioSentNanos = 0L
+    /** Pre-setup audio chunks dropped because the buffer cap was hit. */
+    @Volatile private var preSetupDroppedChunks = 0L
+    /** When the mic level last rose above the near-zero floor (0 = currently above). */
+    @Volatile private var micLowSinceNanos = 0L
     private val inputTranscriptBuffer = StringBuilder()
     private val preSetupAudioBuffer = mutableListOf<String>()
 
@@ -151,7 +175,7 @@ class DesktopRuntime(
                 }
             },
             onAudioError = { message ->
-                controller.updateStatus("အသံစနစ် အခက်အခဲ: $message")
+                controller.updateStatus("အသံစနစ် အခက်အခဲ: $message", AssistantPhase.ERROR)
             },
             // Phase-2 turn-taking hooks: client-side VAD speech transitions.
             // bargeIn=true means the user interrupted assistant playback —
@@ -160,11 +184,22 @@ class DesktopRuntime(
             // need no signal: the server's own VAD owns turn-taking in
             // automatic-VAD mode (activityStart is not valid there).
             onUserSpeechStart = { bargeIn ->
+                // "Heard you" pill the moment speech starts.
+                controller.updateStatus("🎤 ကြားနေပါတယ်…", AssistantPhase.LISTENING)
                 if (bargeIn) session.notifyClientBargeIn()
             },
             onUserSpeechEnd = {
                 session.noteUserTurnEnd()
+                // Turn-flush pill: the captured turn is being handed to Live.
+                controller.updateStatus("📤 ပို့နေပါတယ်…", AssistantPhase.THINKING)
             },
+            onVadStallWarning = {
+                controller.updateStatus(
+                    "⚠️ mic အသံကြားနေသော်လည်း စကားသံ မတွေ့ပါ — sensitivity ကို စစ်ပါ",
+                    AssistantPhase.ERROR,
+                )
+            },
+            selectedMixerName = apiKeyStore.loadAudioInputDevice().ifBlank { null },
             echoCancellerFactory = { isPlaying ->
                 com.example.voicebrainlive.desktop.platform.audio.EchoCancellerFactory.create(
                     apiKeyStore.loadEchoCancellerKind(),
@@ -172,8 +207,8 @@ class DesktopRuntime(
                     onFallback = { message -> DesktopLogger.warn(message) },
                 )
             },
-            // Phase 2 — barge-in sensitivity from settings (default "normal"
-            // preserves the long-standing VAD behavior exactly).
+            // Phase 2 — barge-in sensitivity from settings (default "high" gives
+            // an 8 dB energy margin so quiet onsets are caught).
             vad = com.example.voicebrainlive.desktop.platform.audio.SpectralVad(
                 sensitivity = com.example.voicebrainlive.desktop.platform.audio.SpectralVad.sensitivityForLevel(
                     apiKeyStore.loadBargeInSensitivity(),
@@ -288,8 +323,13 @@ class DesktopRuntime(
                     preSetupAudioBuffer.clear()
                     list
                 }
+                var drained = 0
+                var drainFailed = 0
                 for (chunk in buffered) {
-                    session.sendAudioChunk(chunk)
+                    if (session.sendAudioChunk(chunk)) drained++ else drainFailed++
+                }
+                if (drainFailed > 0) {
+                    DesktopLogger.warn("Setup audio drain: $drained sent, $drainFailed failed")
                 }
                 controller.updateStatus("အသင့်ဖြစ်ပါပြီ — 🎤 နားထောင်နေပါသည်")
             },
@@ -322,7 +362,7 @@ class DesktopRuntime(
             },
             onStatus = {
                 DesktopLogger.info("Gemini status: $it")
-                controller.updateStatus(it)
+                controller.updateStatus(it, controller.mapSessionStatusToPhase(it))
                 if (isLiveFailureStatus(it)) scheduleLiveReconnect()
             },
             onExecuteToolDirect = { cmd, target, value ->
@@ -336,6 +376,39 @@ class DesktopRuntime(
     fun storedApiKey(): String = apiKeyStore.load()
 
     fun storedGeminiModel(): String = apiKeyStore.loadGeminiModel()
+
+    fun storedAudioInputDevice(): String = apiKeyStore.loadAudioInputDevice()
+
+    fun saveAudioInputDevice(name: String) {
+        apiKeyStore.saveAudioInputDevice(name)
+        // Takes effect on the next app start (the capture line opens once at engine construction).
+    }
+
+    fun storedBargeInSensitivity(): String = apiKeyStore.loadBargeInSensitivity()
+
+    fun saveBargeInSensitivity(level: String) {
+        val normalized = com.example.voicebrainlive.desktop.platform.audio.SpectralVad.normalizeLevel(level)
+        apiKeyStore.saveBargeInSensitivity(normalized)
+        audio.updateBargeInSensitivity(normalized)
+    }
+
+    fun storedEchoCancellerKind(): String = apiKeyStore.loadEchoCancellerKind()
+
+    fun saveEchoCancellerKind(kind: String) {
+        apiKeyStore.saveEchoCancellerKind(kind)
+        // Takes effect on the next app start (engine wiring is built once).
+    }
+
+    /** Input mixer names for the Settings audio-device picker. */
+    fun availableInputMixers(): List<String> = runCatching {
+        javax.sound.sampled.AudioSystem.getMixerInfo()
+            .filter { info ->
+                runCatching { javax.sound.sampled.AudioSystem.getMixer(info).targetLineInfo.isNotEmpty() }
+                    .getOrDefault(false)
+            }
+            .map { it.name }
+            .distinct()
+    }.getOrDefault(emptyList())
 
     fun desktopAutomationEnabled(): Boolean = desktopAutomationEnabled
 
@@ -574,8 +647,77 @@ class DesktopRuntime(
         powerOptimizer.onWindowVisibilityChanged(visible)
     }
 
+    /**
+     * A sendAudioChunk() false means not-ready or a dying socket. One failure
+     * is normal (reconnect buffering); a sustained stall (~5s of speech with
+     * no delivery) surfaces on the pill and triggers a reconnect.
+     */
+    private fun onAudioSendFailed() {
+        consecutiveAudioSendFailures++
+        if (!audioSendStallWarned && consecutiveAudioSendFailures >= AUDIO_SEND_STALL_CHUNKS) {
+            audioSendStallWarned = true
+            DesktopLogger.warn("Audio send stalled: $consecutiveAudioSendFailures consecutive chunks not delivered")
+            controller.updateStatus("⚠️ အသံပို့မရသေးပါ — ပြန်လည်ချိတ်ဆက်နေပါသည်…", AssistantPhase.CONNECTING)
+            scheduleLiveReconnect()
+        }
+    }
+
+    /**
+     * Honest waveform support: if the mic level stays near zero for ~2.5s
+     * while listening, flag it so the UI shows flat gray bars + an
+     * input-device hint instead of fake ambience.
+     */
+    private fun updateMicSilentState(level: Float) {
+        if (!listening.get()) {
+            micLowSinceNanos = 0L
+            if (_micSilentWhileListening.value) _micSilentWhileListening.value = false
+            return
+        }
+        val now = System.nanoTime()
+        if (level < MIC_SILENT_LEVEL) {
+            if (micLowSinceNanos == 0L) micLowSinceNanos = now
+            if (!_micSilentWhileListening.value && now - micLowSinceNanos > MIC_SILENT_TIMEOUT_NANOS) {
+                _micSilentWhileListening.value = true
+                DesktopLogger.warn("Mic silent for >2.5s while listening (level=$level)")
+                controller.updateStatus("mic က ဘာမှမကြားရပါ — input device ကို စစ်ပါ", AssistantPhase.ERROR)
+            }
+        } else {
+            micLowSinceNanos = 0L
+            if (_micSilentWhileListening.value) {
+                _micSilentWhileListening.value = false
+                controller.updateStatus("🎤 နားထောင်နေပါသည် — Live native audio အသင့်ဖြစ်ပါပြီ", AssistantPhase.LISTENING)
+            }
+        }
+    }
+
+    /**
+     * App-level heartbeat: the shared OkHttpClient intentionally disables WS
+     * pings, so a half-open socket (uplink audio flowing, server silent) is
+     * detected here. When the user has been speaking but nothing has arrived
+     * from the server for ~10s, reconnect.
+     */
+    private fun installLivenessMonitor() {
+        scope.launch {
+            while (!closed) {
+                delay(5_000L)
+                if (closed || !listening.get() || reconnectInProgress) continue
+                val uplinkRecent = lastUplinkAudioSentNanos != 0L &&
+                    (System.nanoTime() - lastUplinkAudioSentNanos) / 1_000_000L < 10_000L
+                if (uplinkRecent && !session.probeLiveness(10_000L)) {
+                    DesktopLogger.warn(
+                        "Liveness probe failed: uplink audio flowing but no server activity for " +
+                            "${session.lastServerActivityElapsedMs()}ms — reconnecting",
+                    )
+                    controller.updateStatus("🔄 ပြန်လည်ချိတ်ဆက်နေပါသည်…", AssistantPhase.CONNECTING)
+                    scheduleLiveReconnect()
+                }
+            }
+        }
+    }
+
     fun start() {
         watchdog.install()
+        installLivenessMonitor()
         hotkey.register()
         tray.install()
         connectGemini()
@@ -682,19 +824,36 @@ class DesktopRuntime(
         audio.stopPlayback()
         userSpeechDetectedForTurn = false
         liveAudioReceivedForTurn = false
+        lastUplinkAudioSentNanos = 0L
+        consecutiveAudioSendFailures = 0
+        audioSendStallWarned = false
+        micLowSinceNanos = 0L
+        _micSilentWhileListening.value = false
         synchronized(inputTranscriptBuffer) { inputTranscriptBuffer.setLength(0) }
         session.clearAudioBuffer()
         controller.updateListening(true)
         val microphoneStarted = audio.startMicrophone(
             onPcmChunk = { chunk ->
                 audio.noteUplinkAudioSent()
+                lastUplinkAudioSentNanos = System.nanoTime()
                 val sendStart = System.nanoTime()
                 if (session.isLiveReady()) {
-                    session.sendAudioChunk(chunk)
+                    if (session.sendAudioChunk(chunk)) {
+                        consecutiveAudioSendFailures = 0
+                        audioSendStallWarned = false
+                    } else {
+                        onAudioSendFailed()
+                    }
                 } else {
                     synchronized(preSetupAudioBuffer) {
                         if (preSetupAudioBuffer.size < 120) {
                             preSetupAudioBuffer.add(chunk)
+                        } else {
+                            // Bounded: drops are counted and logged, never silent.
+                            preSetupDroppedChunks++
+                            if (preSetupDroppedChunks % 50L == 0L) {
+                                DesktopLogger.warn("preSetupAudioBuffer full; dropping pre-setup audio (total dropped=$preSetupDroppedChunks)")
+                            }
                         }
                     }
                 }
@@ -710,7 +869,10 @@ class DesktopRuntime(
                     DesktopLogger.info("Audio latency rolling p50/p95 (ms):\n${audio.getAudioLatencyReport()}")
                 }
             },
-            onVolumeLevel = { level -> _liveVolumeLevel.value = level },
+            onVolumeLevel = { level ->
+                _liveVolumeLevel.value = level
+                updateMicSilentState(level)
+            },
             onSilenceDetected = {
                 if (listening.get() && liveConversationMode && session.isLiveReady()) {
                     scope.launch {
@@ -718,7 +880,10 @@ class DesktopRuntime(
                         if (result.isFailure) {
                             val message = result.exceptionOrNull()?.message ?: "unknown error"
                             DesktopLogger.warn("Live audio turn flush failed: $message")
-                            controller.updateStatus("အသံအလှည့် ပို့မရသေးပါ — Live ချိတ်ဆက်မှုကို စစ်နေပါတယ်")
+                            controller.updateStatus(
+                                "အသံအလှည့် ပို့မရသေးပါ — Live ချိတ်ဆက်မှုကို စစ်နေပါတယ်",
+                                AssistantPhase.CONNECTING,
+                            )
                         }
                     }
                 }
@@ -734,7 +899,20 @@ class DesktopRuntime(
             listening.set(false)
             liveConversationMode = false
             controller.updateListening(false)
-            controller.updateStatus("Microphone မဖွင့်နိုင်ပါ — Windows input device/permission ကို စစ်ပါ")
+            controller.updateStatus(
+                "Microphone မဖွင့်နိုင်ပါ — Windows input device/permission ကို စစ်ပါ",
+                AssistantPhase.ERROR,
+            )
+            return
+        }
+        // Re-check: the socket may have died between the toggle check and mic
+        // start. Never capture into a dead session — reconnect instead.
+        if (!session.isLiveReady()) {
+            DesktopLogger.warn("Session lost between toggle and mic start; reconnecting instead of capturing into a dead socket")
+            liveConversationMode = false
+            stopListening()
+            controller.updateStatus("🔄 ပြန်လည်ချိတ်ဆက်နေပါသည်…", AssistantPhase.CONNECTING)
+            scheduleLiveReconnect()
             return
         }
         soundEffects.playListeningStarted(scope)
@@ -751,6 +929,8 @@ class DesktopRuntime(
             liveConversationMode = false
         }
         _liveVolumeLevel.value = 0f
+        _micSilentWhileListening.value = false
+        micLowSinceNanos = 0L
         audio.stopMicrophone()
         controller.updateListening(false)
         soundEffects.playListeningStopped(scope)
@@ -903,5 +1083,11 @@ class DesktopRuntime(
     private companion object {
         const val CONNECT_ATTEMPTS = 3
         const val RECONNECT_DELAY_MS = 1_000L
+        /** 32ms chunks; 150 ≈ 4.8s of speech with zero delivery = stalled socket. */
+        const val AUDIO_SEND_STALL_CHUNKS = 150
+        /** Below this raw RMS the mic counts as "hearing nothing". */
+        const val MIC_SILENT_LEVEL = 0.005f
+        /** Near-zero mic level this long while listening => mic-silent flag. */
+        const val MIC_SILENT_TIMEOUT_NANOS = 2_500_000_000L
     }
 }

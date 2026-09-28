@@ -21,6 +21,8 @@ private const val ECHO_COOLDOWN_MS = 400L // Grace period for room acoustic reve
 private const val PRE_ROLL_CHUNKS = 8 // Keep last ~256ms in memory so initial syllable is preserved
 private const val RENDER_REF_KEEP_BYTES = 12_000 // ~250ms of 24kHz render audio kept as AEC reference
 private const val RENDER_REF_FRAME_BYTES_24K = 1_536 // 32ms @ 24kHz — resamples to a 1024-byte 16kHz frame
+private const val VAD_STALL_TIMEOUT_MS = 5_000L // Warn if healthy mic RMS but VAD never fires for this long
+private const val VAD_STALL_HEALTHY_RMS = 0.008f // RMS floor that counts as "the mic hears something"
 
 /**
  * Phase 2 — TURN-TAKING TIMING (why each value is what it is).
@@ -77,6 +79,17 @@ class WindowsAudioEngine(
      */
     private val onUserSpeechStart: ((bargeIn: Boolean) -> Unit)? = null,
     private val onUserSpeechEnd: (() -> Unit)? = null,
+    /**
+     * Fired once when the mic level is healthy but the VAD has not fired for
+     * [VAD_STALL_TIMEOUT_MS] — the VAD gate looks stuck. Callers surface this
+     * on the status pill so the user can check sensitivity/device.
+     */
+    private val onVadStallWarning: (() -> Unit)? = null,
+    /**
+     * Mixer name chosen in Settings ("" = system default). Read once at
+     * engine construction; changing it takes effect on the next app start.
+     */
+    private val selectedMixerName: String? = null,
     captureFactory: ((AudioLatencyTracker) -> AudioCapture)? = null,
     rendererFactory: ((AudioLatencyTracker) -> AudioRenderer)? = null,
     echoCancellerFactory: ((isPlaying: () -> Boolean) -> EchoCanceller)? = null,
@@ -87,7 +100,9 @@ class WindowsAudioEngine(
     private val renderer: AudioRenderer =
         (rendererFactory ?: { tracker -> JavaxSoundRenderer(onAudioError, tracker) })(latencyTracker)
     private val capture: AudioCapture =
-        (captureFactory ?: { tracker -> JavaxSoundCapture(onError = onAudioError, latencyTracker = tracker) })(latencyTracker)
+        (captureFactory ?: { tracker ->
+            JavaxSoundCapture(onError = onAudioError, latencyTracker = tracker, mixerName = selectedMixerName)
+        })(latencyTracker)
     private val echoCanceller: EchoCanceller =
         (echoCancellerFactory ?: { isPlaying -> SuppressionEchoCanceller(isPlaying) })({ isSpeaking() })
 
@@ -141,7 +156,11 @@ class WindowsAudioEngine(
         gainTracker: (Float) -> Unit = {},
     ): ByteArray {
         val targetRms = 0.065f
-        val desiredGain = if (rawRms in 0.008f..0.045f) {
+        // AGC dead-zone fix: the old 0.008 lower bound left very quiet (but
+        // real) speech at gain 1.0, so it could never rise into VAD range.
+        // Extend the boost down to 0.0015; below that is the noise floor and
+        // boosting it would only amplify hiss.
+        val desiredGain = if (rawRms in 0.0015f..0.045f) {
             (targetRms / rawRms).coerceIn(1.0f, 2.5f)
         } else {
             1.0f
@@ -183,6 +202,8 @@ class WindowsAudioEngine(
 
         val preRollBuffer = ConcurrentLinkedDeque<ByteArray>()
         var isUserSpeaking = false
+        var lastVadFireNanos = System.nanoTime()
+        var vadStallWarned = false
 
         fun forwardChunk(chunk: ByteArray) {
             onPcmChunk(Base64.getEncoder().encodeToString(chunk))
@@ -229,6 +250,22 @@ class WindowsAudioEngine(
             val vadStart = System.nanoTime()
             val speech = vad.isSpeech(chunk)
             latencyTracker.record(AudioStage.VAD, System.nanoTime() - vadStart)
+
+            // VAD-gate watchdog: healthy mic level but no VAD fire for ~5s
+            // usually means the gate is stuck (or the mic hears only noise).
+            // Warn once per stall. Skipped while the assistant is speaking —
+            // echo suppression legitimately keeps the VAD quiet then.
+            val nowNanos = System.nanoTime()
+            if (speech) {
+                lastVadFireNanos = nowNanos
+                vadStallWarned = false
+            } else if (!vadStallWarned && !isSpeaking() && rawRms >= VAD_STALL_HEALTHY_RMS &&
+                nowNanos - lastVadFireNanos > VAD_STALL_TIMEOUT_MS * 1_000_000L
+            ) {
+                vadStallWarned = true
+                DesktopLogger.warn("VAD gate stall: healthy mic RMS but no speech detected for ${VAD_STALL_TIMEOUT_MS}ms")
+                onVadStallWarning?.invoke()
+            }
 
             val renderRef = if (echoCanceller.isFullDuplexCapable) takeRenderReference16k() else null
             val aecStart = System.nanoTime()

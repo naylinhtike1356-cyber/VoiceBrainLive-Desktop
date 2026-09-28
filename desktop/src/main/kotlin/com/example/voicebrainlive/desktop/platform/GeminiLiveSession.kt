@@ -72,12 +72,14 @@ class GeminiLiveSession(
         // Google Gemini Live WebSocket does not support standard WS ping frames;
         // keeping pingInterval=0 prevents false pong timeouts.
         // readTimeout is a READ-IDLE timeout: if the server goes completely silent
-        // for 5 minutes the socket is treated as half-open/dead, onFailure fires,
+        // for 90 seconds the socket is treated as half-open/dead, onFailure fires,
         // and the existing auto-reconnect path (DesktopRuntime.scheduleLiveReconnect)
         // can recover. Without this, a dead connection looks "connected" forever.
+        // (An app-level probe — probeLiveness() — catches the subtler case where
+        // uplink audio flows but the server never answers, well before this fires.)
         .pingInterval(0, TimeUnit.MILLISECONDS)
         .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(5, TimeUnit.MINUTES)
+        .readTimeout(90, TimeUnit.SECONDS)
         .writeTimeout(0, TimeUnit.MILLISECONDS)
         .build()
 
@@ -96,6 +98,12 @@ class GeminiLiveSession(
     private val sentAudioChunks = java.util.concurrent.atomic.AtomicLong(0)
     private val failedAudioSends = java.util.concurrent.atomic.AtomicLong(0)
     private val receivedAudioChunks = java.util.concurrent.atomic.AtomicLong(0)
+    /**
+     * Last time any bytes arrived from the server (any message type).
+     * The app-level liveness probe uses this because the shared OkHttpClient
+     * intentionally disables WS pings — pingInterval must stay 0.
+     */
+    @Volatile private var lastServerActivityNanos = 0L
 
     // ---- Phase 2: client-side interruption protocol ----
     //
@@ -190,6 +198,7 @@ class GeminiLiveSession(
         setupSignal = CompletableDeferred()
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                lastServerActivityNanos = System.nanoTime()
                 onStatus("Live WebSocket Connected - Setup ပို့နေပါတယ်…")
                 sendSetup(webSocket)
             }
@@ -208,6 +217,7 @@ class GeminiLiveSession(
                     }
                 } catch (e: Exception) { }
                 if (rawBytes.size > 50) {
+                    lastServerActivityNanos = System.nanoTime()
                     val base64 = Base64.getEncoder().encodeToString(rawBytes)
                     onAudioResponse(base64)
                 }
@@ -939,6 +949,7 @@ class GeminiLiveSession(
     }
 
     private fun handleServerMessage(text: String) {
+        lastServerActivityNanos = System.nanoTime()
         // Parse once up front. A transcript that merely CONTAINS the word "error"
         // (e.g. the user saying "there was an error") must not kill the session,
         // so only treat the message as a server error when the JSON actually
@@ -1091,6 +1102,22 @@ class GeminiLiveSession(
     }
 
     override fun isLiveReady(): Boolean = connected && setupCompleteReceived && webSocket != null
+
+    /**
+     * App-level liveness probe. The shared OkHttpClient intentionally keeps
+     * pingInterval=0 (Gemini Live does not support WS ping frames), so a
+     * half-open socket is detected here instead: the connection only counts
+     * as live when the server has been heard from within
+     * [serverIdleThresholdMs]. DesktopRuntime reconnects when uplink audio is
+     * flowing but this probe fails.
+     */
+    fun probeLiveness(serverIdleThresholdMs: Long = 10_000L): Boolean =
+        isLiveReady() && lastServerActivityElapsedMs() <= serverIdleThresholdMs
+
+    fun lastServerActivityElapsedMs(): Long {
+        val last = lastServerActivityNanos
+        return if (last == 0L) Long.MAX_VALUE else (System.nanoTime() - last) / 1_000_000L
+    }
 
     override fun disconnect() {
         userDisconnectRequested = true

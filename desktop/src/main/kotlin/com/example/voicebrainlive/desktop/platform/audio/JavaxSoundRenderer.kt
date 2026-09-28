@@ -178,6 +178,11 @@ class JavaxSoundRenderer(
                 } catch (e: InterruptedException) {
                     break
                 } catch (e: Throwable) {
+                    // Clear the queue and drop the speaking flag: leaving
+                    // playing=true would keep the echo canceller suppressing
+                    // the mic as if the assistant were still talking.
+                    audioQueue.clear()
+                    setPlaying(false)
                     onError?.invoke("Speaker playback error: ${e.message ?: e::class.simpleName}")
                 }
             }

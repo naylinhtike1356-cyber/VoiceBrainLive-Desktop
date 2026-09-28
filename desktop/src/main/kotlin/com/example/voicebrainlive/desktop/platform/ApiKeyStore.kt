@@ -134,12 +134,13 @@ class ApiKeyStore {
 
     /**
      * Phase 2 — barge-in sensitivity for the client VAD ("low"|"normal"|"high",
-     * default "normal"). Read once at audio-engine construction; voice command
-     * `set_barge_in_sensitivity` also applies it live via
-     * WindowsAudioEngine.updateBargeInSensitivity.
+     * default "high": the 8 dB energy margin catches quiet onsets without
+     * extra false triggers on typical laptop mics). Read once at audio-engine
+     * construction; voice command `set_barge_in_sensitivity` also applies it
+     * live via WindowsAudioEngine.updateBargeInSensitivity.
      */
     fun loadBargeInSensitivity(): String {
-        val stored = preferences.get(KEY_BARGE_IN_SENSITIVITY, "normal")
+        val stored = preferences.get(KEY_BARGE_IN_SENSITIVITY, "high")
         return com.example.voicebrainlive.desktop.platform.audio.SpectralVad.normalizeLevel(stored)
     }
 
@@ -166,6 +167,16 @@ class ApiKeyStore {
         preferences.putInt(KEY_ROBOT_X, x.coerceAtLeast(0))
         preferences.putInt(KEY_ROBOT_Y, y.coerceAtLeast(0))
         flush()
+    }
+
+    /**
+     * Selected microphone input mixer name ("" = system default). Read once
+     * at audio-engine construction; takes effect on the next app start.
+     */
+    fun loadAudioInputDevice(): String = preferences.get(KEY_AUDIO_INPUT_DEVICE, "").trim()
+
+    fun saveAudioInputDevice(name: String) {
+        saveValue(KEY_AUDIO_INPUT_DEVICE, name.trim())
     }
 
     fun loadGeminiModel(): String {
@@ -224,6 +235,7 @@ class ApiKeyStore {
         private const val KEY_ROBOT_Y = "robot_y"
         private const val KEY_ECHO_CANCELLER = "audio_echo_canceller"
         private const val KEY_BARGE_IN_SENSITIVITY = "audio_barge_in_sensitivity"
+        private const val KEY_AUDIO_INPUT_DEVICE = "audio_input_device"
     }
 }
 

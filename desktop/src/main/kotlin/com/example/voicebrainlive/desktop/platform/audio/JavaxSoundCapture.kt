@@ -22,6 +22,11 @@ class JavaxSoundCapture(
     private val chunkBytes: Int = 1024,
     private val onError: ((String) -> Unit)? = null,
     private val latencyTracker: AudioLatencyTracker? = null,
+    /**
+     * Mixer name chosen in Settings (null/blank = system default line).
+     * Unknown names fall back to the default with a warning.
+     */
+    private val mixerName: String? = null,
 ) : AudioCapture {
 
     private var line: TargetDataLine? = null
@@ -42,14 +47,32 @@ class JavaxSoundCapture(
 
     private fun acquire(): TargetDataLine? {
         return runCatching {
-            (AudioSystem.getTargetDataLine(format())).also {
-                it.open(format())
+            val fmt = format()
+            val wanted = mixerName?.takeIf { it.isNotBlank() }
+            val selectedMixer = wanted?.let { name ->
+                val info = AudioSystem.getMixerInfo().firstOrNull { it.name == name }
+                if (info == null) {
+                    DesktopLogger.warn("Audio capture: selected input device '$name' not found; using system default")
+                    null
+                } else {
+                    runCatching { AudioSystem.getMixer(info) }.getOrNull()
+                }
+            }
+            val line = if (selectedMixer != null) {
+                DesktopLogger.info("Audio capture: opening selected input mixer '$wanted'")
+                selectedMixer.getLine(DataLine.Info(TargetDataLine::class.java, fmt)) as TargetDataLine
+            } else {
+                AudioSystem.getTargetDataLine(fmt)
+            }
+            line.also {
+                it.open(fmt)
                 it.start()
             }
         }.recoverCatching {
-            val info = DataLine.Info(TargetDataLine::class.java, format())
+            val fmt = format()
+            val info = DataLine.Info(TargetDataLine::class.java, fmt)
             (AudioSystem.getLine(info) as TargetDataLine).also {
-                it.open(format())
+                it.open(fmt)
                 it.start()
             }
         }.getOrNull()
@@ -71,6 +94,11 @@ class JavaxSoundCapture(
         thread = Thread {
             var current: TargetDataLine? = first
             val buffer = ByteArray(chunkBytes)
+            // Partial reads are accumulated here so every callback delivers a
+            // full chunkBytes frame — AGC/VAD assume fixed-size frames, and a
+            // short frame would corrupt their RMS/energy statistics.
+            val accumulator = ByteArray(chunkBytes)
+            var accCount = 0
             try {
                 while (!Thread.currentThread().isInterrupted && active) {
                     var cl = current
@@ -88,7 +116,6 @@ class JavaxSoundCapture(
                         }
                     }
 
-                    val t0 = System.nanoTime()
                     val count = try {
                         cl.read(buffer, 0, buffer.size)
                     } catch (e: Exception) {
@@ -114,8 +141,23 @@ class JavaxSoundCapture(
                         continue
                     }
 
-                    latencyTracker?.record(AudioStage.CAPTURE, System.nanoTime() - t0)
-                    onFrame(buffer.copyOf(count))
+                    val t0 = System.nanoTime()
+                    // Fold this read into the accumulator and emit only whole
+                    // frames. Leftover bytes carry over to the next read.
+                    var srcOffset = 0
+                    var remaining = count
+                    while (remaining > 0) {
+                        val take = minOf(remaining, chunkBytes - accCount)
+                        buffer.copyInto(accumulator, accCount, srcOffset, srcOffset + take)
+                        accCount += take
+                        srcOffset += take
+                        remaining -= take
+                        if (accCount == chunkBytes) {
+                            latencyTracker?.record(AudioStage.CAPTURE, System.nanoTime() - t0)
+                            onFrame(accumulator.copyOf())
+                            accCount = 0
+                        }
+                    }
                 }
             } finally {
                 runCatching {

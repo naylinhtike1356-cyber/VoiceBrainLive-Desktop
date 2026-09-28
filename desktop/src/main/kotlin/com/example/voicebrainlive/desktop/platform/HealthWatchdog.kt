@@ -38,7 +38,13 @@ data class AppHealthReport(
 class HealthWatchdog(
     private val isOnlineProvider: () -> Boolean,
     private val onAutoReconnect: () -> Unit,
-    private val onSafeStateReset: (String) -> Unit
+    private val onSafeStateReset: (String) -> Unit,
+    /**
+     * Invoked on every 10s liveness tick with the current online value so
+     * callers (DesktopRuntime.sessionHealthy) can expose session health to
+     * the UI without polling the session themselves.
+     */
+    private val onLivenessTick: ((Boolean) -> Unit)? = null,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val startTimeMillis = System.currentTimeMillis()
@@ -91,6 +97,7 @@ class HealthWatchdog(
                 } else {
                     consecutiveFailures = 0
                 }
+                runCatching { onLivenessTick?.invoke(online) }
             }
         }
         DesktopLogger.info("HealthWatchdog installed and monitoring.")

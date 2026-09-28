@@ -233,6 +233,11 @@ private fun VoiceBrainDesktopApp(
     var selectedCommandIndex by remember { mutableStateOf(0) }
     val state by runtime.assistant.state.collectAsState()
     val voiceTyping by runtime.voiceTypingMode.collectAsState()
+    val sessionHealthy by runtime.sessionHealthy.collectAsState()
+    val micSilent by runtime.micSilentWhileListening.collectAsState()
+    var audioInputDevice by remember { mutableStateOf(runtime.storedAudioInputDevice()) }
+    var bargeInSensitivity by remember { mutableStateOf(runtime.storedBargeInSensitivity()) }
+    var echoCancellerKind by remember { mutableStateOf(runtime.storedEchoCancellerKind()) }
     val commandRequest by commandModeRequest.collectAsState()
     val neuralBrainRequest by runtime.showNeuralBrainRequest.collectAsState()
     val commandFocusRequester = remember { FocusRequester() }
@@ -299,6 +304,13 @@ private fun VoiceBrainDesktopApp(
                     desktopAutomationEnabled = desktopAutomationEnabled,
                     robotVisible = robotVisible,
                     status = state.status,
+                    audioInputDevice = audioInputDevice,
+                    bargeInSensitivity = bargeInSensitivity,
+                    echoCancellerKind = echoCancellerKind,
+                    inputMixerNames = remember { runtime.availableInputMixers() },
+                    onAudioInputDeviceChange = { audioInputDevice = it },
+                    onBargeInSensitivityChange = { bargeInSensitivity = it },
+                    onEchoCancellerChange = { echoCancellerKind = it },
                     onApiKeyChange = { apiKey = it },
                     onGeminiModelChange = { geminiModel = it },
                     onDesktopAutomationChange = { desktopAutomationEnabled = it },
@@ -308,6 +320,9 @@ private fun VoiceBrainDesktopApp(
                         runtime.saveApiKey(apiKey)
                         runtime.saveGeminiModel(geminiModel)
                         runtime.saveDesktopAutomationEnabled(desktopAutomationEnabled)
+                        runtime.saveAudioInputDevice(audioInputDevice)
+                        runtime.saveBargeInSensitivity(bargeInSensitivity)
+                        runtime.saveEchoCancellerKind(echoCancellerKind)
                         showSettings = false
                     },
                     onClear = {
@@ -401,7 +416,20 @@ private fun VoiceBrainDesktopApp(
                             }
 
 
-                            StatusPill(state.status, state.isConnected, state.isListening, state.phase)
+                            // Honest status: while listening against a dead session,
+                            // force the reconnecting pill instead of a stale
+                            // "listening" state.
+                            val pillStatus = if (state.isListening && !sessionHealthy) {
+                                "🔄 ပြန်လည်ချိတ်ဆက်နေပါသည်…"
+                            } else {
+                                state.status
+                            }
+                            val pillPhase = if (state.isListening && !sessionHealthy) {
+                                AssistantPhase.CONNECTING
+                            } else {
+                                state.phase
+                            }
+                            StatusPill(pillStatus, state.isConnected, state.isListening, pillPhase)
 
                             Surface(
                                 color = CardSoft,
@@ -464,7 +492,16 @@ private fun VoiceBrainDesktopApp(
                                 AudioWaveformVisualizer(
                                     level = liveLevel,
                                     isActive = state.isListening || state.phase == AssistantPhase.SPEAKING,
+                                    micSilent = micSilent,
                                 )
+                                if (micSilent) {
+                                    Text(
+                                        "mic က ဘာမှမကြားရပါ — input device ကို စစ်ပါ",
+                                        color = Color(0xFFFF6B6B),
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                }
 
                                 MicrophoneButton(isActive = state.isListening, onClick = runtime::toggleListening)
 
@@ -800,6 +837,11 @@ private fun ChatMessageBubble(message: com.example.voicebrainlive.desktop.core.C
                                     modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
                                 )
                             }
+                            Text(
+                                text = java.text.SimpleDateFormat("HH:mm").format(java.util.Date(message.timestamp)),
+                                color = TextSub,
+                                fontSize = 9.sp,
+                            )
                         }
 
                         // Copy Button with Copied feedback
@@ -836,26 +878,23 @@ private fun ChatMessageBubble(message: com.example.voicebrainlive.desktop.core.C
 private fun AudioWaveformVisualizer(
     level: Float,
     isActive: Boolean,
+    micSilent: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
-    val transition = rememberInfiniteTransition(label = "waveform")
-    val wavePhase by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 6.28318f,
-        animationSpec = infiniteRepeatable(tween(1000), RepeatMode.Restart),
-        label = "wave-phase",
-    )
-
     Row(
         modifier = modifier.height(34.dp),
         horizontalArrangement = Arrangement.spacedBy(5.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         val barCount = 9
-        for (i in 0 until barCount) {
-            val sinVal = (Math.sin(wavePhase.toDouble() + i * 0.55).toFloat() + 1f) / 2f
-            val heightFactor = if (isActive) (0.18f + (level * 0.75f + sinVal * 0.50f)).coerceIn(0.12f, 1f) else 0.10f
-            val brush = if (isActive) {
+        repeat(barCount) {
+            // Honest bars: real mic level only — no sine-wave ambience. When
+            // the mic hears nothing the bars stay flat instead of dancing.
+            val heightFactor = when {
+                !isActive || micSilent -> 0.10f
+                else -> (0.12f + level * 0.88f).coerceIn(0.12f, 1f)
+            }
+            val brush = if (isActive && !micSilent) {
                 Brush.verticalGradient(listOf(AccentMint, AccentCyan))
             } else {
                 Brush.verticalGradient(listOf(Color(0xFF334155), Color(0xFF1E293B)))
@@ -984,7 +1023,8 @@ private fun StatusPill(status: String, connected: Boolean, listening: Boolean, p
     val color = when (phase) {
         AssistantPhase.LISTENING -> AccentMint
         AssistantPhase.SPEAKING -> AccentGold
-        AssistantPhase.THINKING, AssistantPhase.CONNECTING -> AccentCyan
+        AssistantPhase.THINKING -> Color(0xFFA78BFA)
+        AssistantPhase.CONNECTING -> AccentCyan
         AssistantPhase.CONFIRMING -> Color(0xFFFF9F68)
         AssistantPhase.ERROR -> Color(0xFFFF6B6B)
         AssistantPhase.READY -> if (connected) AccentCyan else Color(0xFF475569)
@@ -1016,7 +1056,7 @@ private fun StatusPill(status: String, connected: Boolean, listening: Boolean, p
                 .clip(CircleShape)
                 .background(animatedColor)
         )
-        Text(status, color = TextMain, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+        Text(status, color = TextMain, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -1028,6 +1068,13 @@ private fun SettingsPanel(
     desktopAutomationEnabled: Boolean,
     robotVisible: Boolean,
     status: String,
+    audioInputDevice: String,
+    bargeInSensitivity: String,
+    echoCancellerKind: String,
+    inputMixerNames: List<String>,
+    onAudioInputDeviceChange: (String) -> Unit,
+    onBargeInSensitivityChange: (String) -> Unit,
+    onEchoCancellerChange: (String) -> Unit,
     onApiKeyChange: (String) -> Unit,
     onGeminiModelChange: (String) -> Unit,
     onDesktopAutomationChange: (Boolean) -> Unit,
@@ -1138,6 +1185,103 @@ private fun SettingsPanel(
                     singleLine = true,
                     label = { Text("Live model name (Live-only)") },
                     shape = RoundedCornerShape(8.dp),
+                )
+            }
+        }
+
+        // Audio Devices Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = CardBg),
+            shape = RoundedCornerShape(12.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, BorderColor),
+        ) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("🎤 Audio Input Device", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = AccentMint)
+                Text(
+                    "မိုက်ခရိုဖုန်း input device ရွေးချယ်ပါ။ ပြောင်းလဲမှုသည် အက်ပ် ပြန်ဖွင့်မှ သက်ရောက်ပါမည်။",
+                    color = TextSub,
+                    fontSize = 11.sp,
+                    lineHeight = 16.sp
+                )
+
+                val deviceOptions = listOf("" to "System Default") + inputMixerNames.map { it to it }
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    deviceOptions.forEach { (id, label) ->
+                        val isSelected = audioInputDevice == id
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (isSelected) CardHighlight else CardSoft)
+                                .border(1.dp, if (isSelected) AccentMint else BorderColor, RoundedCornerShape(8.dp))
+                                .clickable { onAudioInputDeviceChange(id) }
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                label,
+                                color = if (isSelected) AccentMint else TextMain,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            if (isSelected) {
+                                Text("✓ Active", color = AccentMint, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+
+                Text("ဖြတ်ပြောမှု ထိခိုက်လွယ်တာ (Barge-in Sensitivity)", color = TextMain, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("low" to "နိမ့်", "normal" to "ပုံမှန်", "high" to "မြင့်").forEach { (id, label) ->
+                        val isSelected = bargeInSensitivity == id
+                        Surface(
+                            color = if (isSelected) AccentMint.copy(alpha = 0.2f) else CardSoft,
+                            shape = RoundedCornerShape(8.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, if (isSelected) AccentMint else BorderColor),
+                            modifier = Modifier.clickable { onBargeInSensitivityChange(id) }
+                        ) {
+                            Text(
+                                label,
+                                color = if (isSelected) AccentMint else TextMain,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                            )
+                        }
+                    }
+                }
+
+                Text("Echo Canceller", color = TextMain, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("suppression" to "Suppression", "webrtc_aec3" to "WebRTC AEC3").forEach { (id, label) ->
+                        val isSelected = echoCancellerKind == id
+                        Surface(
+                            color = if (isSelected) AccentCyan.copy(alpha = 0.2f) else CardSoft,
+                            shape = RoundedCornerShape(8.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, if (isSelected) AccentCyan else BorderColor),
+                            modifier = Modifier.clickable { onEchoCancellerChange(id) }
+                        ) {
+                            Text(
+                                label,
+                                color = if (isSelected) AccentCyan else TextMain,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                            )
+                        }
+                    }
+                }
+                Text(
+                    "WebRTC AEC3 ကို ရွေးပါက webrtc_aec3.dll လိုအပ်ပြီး အက်ပ် ပြန်ဖွင့်မှ သက်ရောက်ပါမည် (အသေးစိတ် native/BUILD_WINDOWS.md)။",
+                    color = TextSub,
+                    fontSize = 10.sp,
+                    lineHeight = 14.sp
                 )
             }
         }

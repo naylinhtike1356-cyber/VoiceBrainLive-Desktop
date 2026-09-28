@@ -229,6 +229,29 @@ class AssistantController(
         }
     }
 
+    /**
+     * Explicit phase mapping for GeminiLiveSession status strings. The
+     * session-status path must not rely on free-text keyword inference
+     * (e.g. thinking states are THINKING/purple, never CONNECTING/cyan);
+     * unknown strings fall back to [inferPhase].
+     */
+    fun mapSessionStatusToPhase(status: String): AssistantPhase {
+        val s = status.lowercase()
+        return when {
+            s.contains("live error") || s.contains("setup timeout") ||
+                s.contains("မအောင်မြင်ပါ") || s.contains("မရနိုင်") ||
+                s.contains("disconnected") || s.contains("gemini_api_key မထည့်ရသေးပါ") ||
+                s.startsWith("error:") -> AssistantPhase.ERROR
+            s.contains("ချိတ်ဆက်နေပါတယ်") || s.contains("setup ပို့နေပါတယ်") ||
+                s.contains("ပြန်လည်ချိတ်ဆက်နေပါသည်") -> AssistantPhase.CONNECTING
+            s.contains("စဉ်းစား") || s.contains("သုံးသပ်နေပါတယ်") ||
+                s.contains("အဖြေထုတ်နေပါတယ်") || s.contains("ပို့နေပါတယ်") -> AssistantPhase.THINKING
+            s.contains("နားထောင်နေပါသည်") || s.contains("နားထောင်နေပါတယ်") -> AssistantPhase.LISTENING
+            s.contains("အသင့်ဖြစ်ပါပြီ") -> AssistantPhase.READY
+            else -> inferPhase(s)
+        }
+    }
+
     fun updateListening(value: Boolean) {
         _state.value = _state.value.copy(isListening = value, phase = if (value) AssistantPhase.LISTENING else AssistantPhase.READY)
     }
