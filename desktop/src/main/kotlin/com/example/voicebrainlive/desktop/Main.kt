@@ -1,5 +1,7 @@
 package com.example.voicebrainlive.desktop
 
+@file:OptIn(androidx.compose.animation.ExperimentalAnimationApi::class)
+
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState

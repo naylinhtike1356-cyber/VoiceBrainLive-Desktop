@@ -135,9 +135,11 @@ fun AssistantOrb(
             .clickable(role = Role.Button, onClick = onClick),
     ) {
         Canvas(modifier = Modifier.size(size)) {
-            // Inside this draw scope, `size` is the canvas size in pixels.
-            val r = size.minDimension / 2f
-            val center = Offset(size.width / 2f, size.height / 2f)
+            // NOTE: the composable's `size: Dp` param shadows DrawScope.size,
+            // so reach the canvas pixel size via the explicit receiver.
+            val pxSize = this.size
+            val r = pxSize.minDimension / 2f
+            val center = Offset(pxSize.width / 2f, pxSize.height / 2f)
             val c = animatedColor
             val silentListening = micSilent && phase == AssistantPhase.LISTENING
 
