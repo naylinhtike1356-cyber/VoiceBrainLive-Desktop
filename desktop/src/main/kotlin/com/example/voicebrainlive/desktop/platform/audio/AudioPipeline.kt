@@ -129,8 +129,8 @@ interface EchoCanceller {
      * @param micFrame raw (AGC'd) capture frame, 16 kHz mono 16-bit LE.
      * @param renderReference the audio currently being rendered, resampled to
      *   16 kHz mono 16-bit LE and length-matched to [micFrame] as closely as
-     *   possible; null when nothing is playing (or when the canceller does
-     *   not need a reference, e.g. pure suppression).
+     *   possible; null when nothing is playing. The suppression canceller uses
+     *   it as an echo gate for barge-in detection.
      * @param speechDetected the [VoiceActivityDetector] verdict for this frame.
      */
     fun processCapture(

@@ -129,6 +129,62 @@ class AudioPipelineTest {
         assertTrue(canceller.processCapture(frame, null, speechDetected = true) is EchoDecision.Suppress)
     }
 
+    /** Sine frame at the given peak amplitude (RMS ~= amplitude / sqrt(2)). */
+    private fun toneFrame(amplitude: Float): ByteArray =
+        pcm16(FloatArray(frameSamples) { j ->
+            val t = j.toDouble() / 16000
+            (sin(2 * PI * 220 * t) * amplitude).toFloat()
+        })
+
+    @Test
+    fun echoGateBlocksSelfInterruption() {
+        // Speaker emitting loudly; the mic hears only attenuated echo.
+        // The echo trips the VAD, but the gate must never let it become a
+        // barge-in — otherwise the assistant interrupts itself and its
+        // responses are never heard.
+        val canceller = SuppressionEchoCanceller(isPlaying = { true })
+        val render = toneFrame(0.30f) // RMS ~0.21
+        val echo = toneFrame(0.06f) // room-attenuated echo, RMS ~0.042
+        repeat(40) {
+            val decision = canceller.processCapture(echo, render, speechDetected = true)
+            assertTrue(
+                "echo frame $it must not barge in",
+                decision is EchoDecision.Suppress,
+            )
+        }
+    }
+
+    @Test
+    fun echoGateAllowsRealBargeInOverSpeaker() {
+        // User speaks firmly over the playing speaker: the mic level sits
+        // clearly above the learned echo floor → barge-in must still work.
+        val canceller = SuppressionEchoCanceller(isPlaying = { true })
+        val render = toneFrame(0.30f) // RMS ~0.21
+        val echo = toneFrame(0.06f)
+        // Let the floor converge on the echo first (a few frames).
+        repeat(10) {
+            canceller.processCapture(echo, render, speechDetected = true)
+        }
+        // User voice: clearly above floor*2.5.
+        val userVoice = toneFrame(0.60f) // RMS ~0.42
+        assertTrue(
+            canceller.processCapture(userVoice, render, speechDetected = true) is EchoDecision.Suppress,
+        )
+        val second = canceller.processCapture(userVoice, render, speechDetected = true)
+        assertTrue("firm user voice over the speaker must barge in", second is EchoDecision.BargeIn)
+    }
+
+    @Test
+    fun bargeInWorksWhenSpeakerIsSilent() {
+        // Speaker-silent gap during playback (render reference silent): the
+        // VAD verdict alone is trustworthy — no echo to gate against.
+        val canceller = SuppressionEchoCanceller(isPlaying = { true })
+        val silentRender = ByteArray(frameSamples * 2)
+        val frame = burstFrame(0)
+        assertTrue(canceller.processCapture(frame, silentRender, speechDetected = true) is EchoDecision.Suppress)
+        assertTrue(canceller.processCapture(frame, silentRender, speechDetected = true) is EchoDecision.BargeIn)
+    }
+
     @Test
     fun factoryFallsBackToSuppressionWithoutNativeLib() {
         var fallbackMessage: String? = null

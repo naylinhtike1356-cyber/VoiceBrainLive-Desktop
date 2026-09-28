@@ -271,7 +271,11 @@ class WindowsAudioEngine(
                 onVadStallWarning?.invoke()
             }
 
-            val renderRef = if (echoCanceller.isFullDuplexCapable) takeRenderReference16k() else null
+            // Always take the render reference while capturing: the suppression
+            // canceller uses it as an echo gate so the assistant's own speaker
+            // output cannot false-trigger barge-in (self-interruption). Cheap
+            // (one deque peek + 32 ms resample) and null when nothing is playing.
+            val renderRef = takeRenderReference16k()
             val aecStart = System.nanoTime()
             val decision = echoCanceller.processCapture(chunk, renderRef, speech)
             latencyTracker.record(AudioStage.AEC, System.nanoTime() - aecStart)
@@ -380,7 +384,9 @@ class WindowsAudioEngine(
     }
 
     private fun rememberRenderReference(data: ByteArray) {
-        if (!echoCanceller.isFullDuplexCapable) return
+        // Kept for every canceller kind: the suppression canceller uses the
+        // reference as an echo gate for barge-in detection, not just the
+        // full-duplex AEC.
         synchronized(renderRefBuffer) {
             renderRefBuffer.addLast(data)
             renderRefBytes += data.size

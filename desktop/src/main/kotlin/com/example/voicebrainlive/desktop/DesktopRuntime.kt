@@ -121,6 +121,9 @@ class DesktopRuntime(
 
     /** Throttles the periodic rolling audio-latency telemetry log (no audio contents). */
     @Volatile private var lastLatencyReportLogMs = 0L
+    /** Server audio chunks dropped by barge-in suppression (diagnostic counter). */
+    private val suppressedServerAudioChunks = java.util.concurrent.atomic.AtomicLong(0)
+    @Volatile private var lastSuppressedAudioLogMs = 0L
     /** Consecutive sendAudioChunk() failures (not-ready or ws.send()==false). */
     @Volatile private var consecutiveAudioSendFailures = 0
     @Volatile private var audioSendStallWarned = false
@@ -296,6 +299,20 @@ class DesktopRuntime(
                 // instead of playing it over the user who just barged in.
                 if (!session.shouldSuppressServerAudio()) {
                     audio.playPcmBase64(payload)
+                } else {
+                    // Throttled diagnostic: if this fires continuously, the
+                    // barge-in detector is false-triggering (e.g. on echo) and
+                    // eating the response audio — the top suspect for
+                    // "text arrives but no voice is heard".
+                    val dropped = suppressedServerAudioChunks.incrementAndGet()
+                    val nowMs = System.currentTimeMillis()
+                    if (nowMs - lastSuppressedAudioLogMs > 5_000L) {
+                        lastSuppressedAudioLogMs = nowMs
+                        DesktopLogger.warn(
+                            "Turn-taking telemetry: dropped $dropped server audio chunk(s) total " +
+                                "to barge-in suppression (latest turn)",
+                        )
+                    }
                 }
             },
             onTurnComplete = {
