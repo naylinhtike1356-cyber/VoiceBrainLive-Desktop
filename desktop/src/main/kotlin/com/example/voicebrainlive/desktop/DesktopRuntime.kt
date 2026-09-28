@@ -207,7 +207,8 @@ class DesktopRuntime(
             onInputTranscript = { text ->
                 if (text.isNotBlank()) {
                     userSpeechDetectedForTurn = true
-                    DesktopLogger.info("Live input transcript: ${text.trim()}")
+                    // Privacy: log that a transcript arrived, never its content.
+                    DesktopLogger.info("Live input transcript received (${text.trim().length} chars)")
                 }
                 if (_voiceTypingMode.value && isVoiceTypingStopPhrase(text)) {
                     setVoiceTypingMode(false)
@@ -220,7 +221,8 @@ class DesktopRuntime(
                 handlePowerConfirmation(text)
             },
             onOutputTranscript = { text ->
-                DesktopLogger.info("Live output transcript: ${text.trim()}")
+                // Privacy: log that a transcript arrived, never its content.
+                DesktopLogger.info("Live output transcript received (${text.trim().length} chars)")
                 assistant.updateResponse(text)
             },
             onAudioResponse = { payload ->

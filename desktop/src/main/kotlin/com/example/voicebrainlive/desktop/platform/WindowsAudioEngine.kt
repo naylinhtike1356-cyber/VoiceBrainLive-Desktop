@@ -19,7 +19,6 @@ private const val SAMPLE_SIZE_BITS = 16
 private const val JITTER_PREBUFFER_BYTES = 5_760 // ~120ms of 24kHz 16-bit mono audio (smooth anti-stutter buffer)
 private const val LINE_BUFFER_SIZE = 28_800 // ~600ms hardware buffer
 private const val CAPTURE_CHUNK_BYTES = 1024 // 32ms at 16kHz, mono, 16-bit
-private const val SPEECH_RMS_THRESHOLD = 0.016f // Sensitivity threshold to start speech burst
 private const val BARGE_IN_RMS_THRESHOLD = 0.080f // Distinct human voice volume to intentionally interrupt assistant
 private const val SPEECH_HANGOVER_MS = 750L // Keep streaming during natural pauses between words
 private const val PRE_ROLL_CHUNKS = 8 // Keep last ~256ms in memory so initial syllable is preserved
@@ -70,6 +69,7 @@ class WindowsAudioEngine(
     private var playbackThread: Thread? = null
     private val capturedChunks = AtomicLong(0)
     private val queuedOutputChunks = AtomicLong(0)
+    private val droppedOutputChunks = AtomicLong(0)
 
     @Volatile private var isSpeaking = false
     @Volatile private var lastPlaybackTime = 0L
@@ -177,8 +177,15 @@ class WindowsAudioEngine(
                                 }
                                 lastPlaybackTime = System.currentTimeMillis()
                             } else {
-                                // Stream finished. Drain hardware line buffer completely so no words are cut off!
-                                runCatching { line?.drain() }
+                                // Stream finished. Drain the hardware line buffer so no words
+                                // are cut off — but skip the (up to ~600ms) blocking drain when
+                                // the buffer is already empty, so freshly arriving audio chunks
+                                // are never stuck behind it. available() reports free buffer
+                                // space; free == full size means nothing left to drain.
+                                val drainLine = line
+                                if (drainLine != null && drainLine.available() < LINE_BUFFER_SIZE) {
+                                    runCatching { drainLine.drain() }
+                                }
                                 lastPlaybackTime = System.currentTimeMillis()
                                 break
                             }
@@ -242,6 +249,9 @@ class WindowsAudioEngine(
         return output
     }
 
+    // Synchronized: two rapid start calls must never spawn two capture threads
+    // (which would send duplicated audio to Gemini and corrupt VAD state).
+    @Synchronized
     fun startMicrophone(
         onPcmChunk: (base64Pcm: String) -> Unit,
         onVolumeLevel: (level: Float) -> Unit = {},
@@ -265,6 +275,11 @@ class WindowsAudioEngine(
             var isUserSpeaking = false
             var lastSpeechTimestamp = 0L
             var consecutiveBargeInCount = 0
+            // Holds the first loud chunk heard while the assistant is speaking.
+            // The barge-in detector needs 2 consecutive loud chunks to confirm a
+            // deliberate interruption; without this the first chunk (the actual
+            // syllable onset) would be dropped and Gemini would hear a clipped word.
+            var bargeInFirstChunk: ByteArray? = null
 
             try {
                 while (!Thread.currentThread().isInterrupted && isCaptureActive) {
@@ -332,6 +347,10 @@ class WindowsAudioEngine(
                         // Assistant is actively speaking out of speakers:
                         // Suppress mic forwarding to prevent acoustic echo loop and self-interruption!
                         if (rawRms > BARGE_IN_RMS_THRESHOLD) {
+                            if (consecutiveBargeInCount == 0) {
+                                // Possible syllable onset — hold it until the interruption is confirmed.
+                                bargeInFirstChunk = chunk
+                            }
                             consecutiveBargeInCount++
                             if (consecutiveBargeInCount >= 2) {
                                 // True user barge-in! Stop assistant playback immediately.
@@ -340,15 +359,24 @@ class WindowsAudioEngine(
                                 isUserSpeaking = true
                                 lastSpeechTimestamp = now
                                 onSpeechStarted()
+                                // Flush the saved onset chunk first so the first
+                                // syllable of the interruption is not clipped.
+                                bargeInFirstChunk?.let { first ->
+                                    bargeInFirstChunk = null
+                                    onPcmChunk(Base64.getEncoder().encodeToString(first))
+                                    capturedChunks.incrementAndGet()
+                                }
                                 val base64Chunk = Base64.getEncoder().encodeToString(chunk)
                                 onPcmChunk(base64Chunk)
                                 capturedChunks.incrementAndGet()
                             }
                         } else {
                             consecutiveBargeInCount = 0
+                            bargeInFirstChunk = null
                         }
                     } else {
                         consecutiveBargeInCount = 0
+                        bargeInFirstChunk = null
 
                         if (rawRms > dynamicSpeechThreshold) {
                             // User speech burst detected
@@ -419,6 +447,7 @@ class WindowsAudioEngine(
         return (rms / 32768.0).toFloat().coerceIn(0f, 1f)
     }
 
+    @Synchronized
     fun stopMicrophone() {
         isCaptureActive = false
         captureThread?.interrupt()
@@ -437,7 +466,10 @@ class WindowsAudioEngine(
                 setSpeakingState(true)
                 lastPlaybackTime = System.currentTimeMillis()
                 val aligned = if (data.size % 2 != 0) data.copyOf(data.size - 1) else data
-                audioQueue.offer(aligned)
+                if (!audioQueue.offer(aligned)) {
+                    val dropped = droppedOutputChunks.incrementAndGet()
+                    DesktopLogger.warn("Audio playback queue full; dropping chunk (${aligned.size} bytes, total dropped=$dropped)")
+                }
                 val outputCount = queuedOutputChunks.incrementAndGet()
                 if (outputCount == 1L || outputCount % 20L == 0L) {
                     DesktopLogger.info("Audio telemetry: queuedOutputChunks=$outputCount bytes=${aligned.size}")
@@ -458,13 +490,23 @@ class WindowsAudioEngine(
             setSpeakingState(true)
             lastPlaybackTime = System.currentTimeMillis()
             val aligned = if (bytes.size % 2 != 0) bytes.copyOf(bytes.size - 1) else bytes
-            audioQueue.offer(aligned)
+            if (!audioQueue.offer(aligned)) {
+                val dropped = droppedOutputChunks.incrementAndGet()
+                DesktopLogger.warn("Audio playback queue full; dropping chunk (${aligned.size} bytes, total dropped=$dropped)")
+            }
         }
     }
 
     fun stopPlayback() {
         audioQueue.clear()
         setSpeakingState(false)
+        // Intentional stop (barge-in / user takeover): clear the echo-cooldown
+        // timestamp too, otherwise isSpeaking() stays true for another ~400ms
+        // and the capture loop keeps applying the high barge-in threshold to the
+        // user's already-started speech, suppressing its beginning.
+        // (Natural end-of-playback never calls this; it uses setSpeakingState(false)
+        // directly so the reverb guard still applies there.)
+        lastPlaybackTime = 0L
         runCatching {
             speaker?.flush()
             speaker?.stop()

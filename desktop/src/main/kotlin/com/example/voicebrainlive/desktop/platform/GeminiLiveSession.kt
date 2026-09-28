@@ -1,10 +1,8 @@
 package com.example.voicebrainlive.desktop.platform
 
 import com.example.voicebrainlive.desktop.core.VoiceSession
-import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.CompletableDeferred
@@ -57,17 +55,23 @@ class GeminiLiveSession(
     private val normalizedModel = modelName.trim().removePrefix("models").removePrefix("/").let {
         if (it.isBlank()) DEFAULT_LIVE_MODEL else it
     }
-    private var model: String = "models/$normalizedModel"
+    // Written from OkHttp callback threads by checkAndTriggerModelFallback,
+    // read on Dispatchers.IO in connect(). Must be volatile.
+    @Volatile private var model: String = "models/$normalizedModel"
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    // Single shared OkHttpClient is intentional: its dispatcher threads and
+    // connection pool are reused across reconnects by design (not a leak).
     private val client = OkHttpClient.Builder()
         .protocols(listOf(okhttp3.Protocol.HTTP_1_1))
-        // Set timeouts to 0 (infinite) for bidirectional WebSocket streaming.
         // Google Gemini Live WebSocket does not support standard WS ping frames;
         // keeping pingInterval=0 prevents false pong timeouts.
+        // readTimeout is a READ-IDLE timeout: if the server goes completely silent
+        // for 5 minutes the socket is treated as half-open/dead, onFailure fires,
+        // and the existing auto-reconnect path (DesktopRuntime.scheduleLiveReconnect)
+        // can recover. Without this, a dead connection looks "connected" forever.
         .pingInterval(0, TimeUnit.MILLISECONDS)
         .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(0, TimeUnit.MILLISECONDS)
+        .readTimeout(5, TimeUnit.MINUTES)
         .writeTimeout(0, TimeUnit.MILLISECONDS)
         .build()
 
@@ -78,6 +82,9 @@ class GeminiLiveSession(
     @Volatile private var setupCompleteReceived = false
     @Volatile private var setupSignal = CompletableDeferred<Unit>()
     private val audioBuffer = ByteArrayOutputStream()
+    // 16kHz 16-bit mono PCM = 32,000 bytes/sec; cap pre-setup buffering at ~5 seconds.
+    private val MAX_BUFFERED_AUDIO_BYTES = 160_000
+    private val BUFFER_DRAIN_CHUNK_BYTES = 4096 // ~= 128ms per message
     private val restChatHistory = mutableListOf<JSONObject>()
     private val liveTurnText = StringBuilder()
     private val sentAudioChunks = java.util.concurrent.atomic.AtomicLong(0)
@@ -166,7 +173,17 @@ class GeminiLiveSession(
             }
         })
 
-        val ready = withTimeoutOrNull(45_000L) { setupSignal.await() } != null
+        // setupSignal may complete exceptionally (onFailure/onClosed fire before
+        // setup). Await would then throw — convert that into Result.failure so
+        // callers always get a Result, never an unexpected exception.
+        val ready = try {
+            withTimeoutOrNull(45_000L) { setupSignal.await() } != null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            DesktopLogger.warn("Gemini Live setup failed before timeout: ${e.message}")
+            false
+        }
         if (!ready) {
             webSocket?.cancel()
             webSocket = null
@@ -267,18 +284,68 @@ class GeminiLiveSession(
                 }
             } else {
                 failedAudioSends.incrementAndGet()
-                DesktopLogger.warn("Live audio telemetry: ws.send() returned false (buffer full or closing)")
+                DesktopLogger.warn("Live audio telemetry: ws.send() returned false (buffer full or closing); buffering chunk for reconnect drain")
+                // The socket is dying — don't silently drop this 32ms of speech.
+                // It will be re-sent by drainAudioBuffer() after reconnect.
+                bufferAudioChunk(base64Pcm)
             }
             return sent
         } else {
-            synchronized(audioBuffer) {
-                runCatching {
-                    val bytes = Base64.getDecoder().decode(base64Pcm)
-                    audioBuffer.write(bytes)
+            bufferAudioChunk(base64Pcm)
+            // Buffered, NOT sent: report false so callers never mistake this for delivery.
+            return false
+        }
+    }
+
+    /**
+     * Holds raw PCM (decoded from base64) for later re-send, capped so a long
+     * outage can't grow memory without bound. Newest speech is kept: when the
+     * cap is hit the stale prefix is dropped, not the fresh audio.
+     */
+    private fun bufferAudioChunk(base64Pcm: String) {
+        synchronized(audioBuffer) {
+            runCatching {
+                val bytes = Base64.getDecoder().decode(base64Pcm)
+                if (audioBuffer.size() + bytes.size > MAX_BUFFERED_AUDIO_BYTES) {
+                    DesktopLogger.warn("Audio buffer full (${audioBuffer.size()} bytes); dropping stale buffered audio")
+                    audioBuffer.reset()
                 }
+                audioBuffer.write(bytes)
             }
         }
-        return true
+    }
+
+    /**
+     * Sends audio that was buffered while the socket was not ready.
+     * Called once when setup completes.
+     */
+    private fun drainAudioBuffer() {
+        val bytes: ByteArray = synchronized(audioBuffer) {
+            if (audioBuffer.size() == 0) return
+            audioBuffer.toByteArray().also { audioBuffer.reset() }
+        }
+        val encoder = Base64.getEncoder()
+        var offset = 0
+        var chunks = 0
+        // 16kHz 16-bit mono = 32,000 bytes/sec; 4096 bytes ~= 128ms per message.
+        while (offset < bytes.size) {
+            val end = minOf(offset + BUFFER_DRAIN_CHUNK_BYTES, bytes.size)
+            if (!sendAudioChunk(encoder.encodeToString(bytes.copyOfRange(offset, end)))) {
+                // Socket dropped mid-drain. sendAudioChunk() already re-buffered
+                // the failed chunk; preserve everything after it too, otherwise
+                // the tail of the user's speech would be silently lost.
+                val remaining = bytes.size - end
+                if (remaining > 0) {
+                    synchronized(audioBuffer) {
+                        audioBuffer.write(bytes, end, remaining)
+                    }
+                }
+                break
+            }
+            chunks++
+            offset = end
+        }
+        DesktopLogger.info("Drained $chunks buffered audio chunks ($offset of ${bytes.size} bytes sent)")
     }
 
     override fun clearAudioBuffer() {
@@ -485,15 +552,16 @@ class GeminiLiveSession(
                 restChatHistory.add(modelTurn)
 
                 val functionResponseParts = JSONArray()
-                for ((idx, fcPart) in functionCalls.withIndex()) {
+                for (fcPart in functionCalls) {
                     val fc = fcPart.getJSONObject("functionCall")
-                    val callId = "call_${System.currentTimeMillis()}_$idx"
                     val args = fc.optJSONObject("args")
                     val cmdType = args?.optString("command_type")?.takeIf { it.isNotBlank() } ?: fc.optString("name")
                     val target = args?.optString("target")?.takeIf { it.isNotBlank() }
                     val value = args?.optString("value")?.takeIf { it.isNotBlank() }
 
-                    onToolCall(callId, cmdType, target, value)
+                    // REST fallback path: execute exactly once via onExecuteToolDirect.
+                    // (onToolCall is the Live-WebSocket flow; invoking it here too
+                    // would execute the same command a second time.)
                     val toolResult = onExecuteToolDirect.invoke(cmdType, target, value)
 
                     functionResponseParts.put(JSONObject().apply {
@@ -605,14 +673,14 @@ class GeminiLiveSession(
                         }
                         if (p.has("functionCall")) {
                             val fc = p.getJSONObject("functionCall")
-                            val callId = "call_${System.currentTimeMillis()}_$i"
                             val args = fc.optJSONObject("args")
                             val cmdType = args?.optString("command_type")?.takeIf { it.isNotBlank() } ?: fc.optString("name")
                             val target = args?.optString("target")?.takeIf { it.isNotBlank() }
                             val value = args?.optString("value")?.takeIf { it.isNotBlank() }
 
-                            onToolCall(callId, cmdType, target, value)
-
+                            // REST fallback path: execute exactly once via onExecuteToolDirect.
+                            // (onToolCall is the Live-WebSocket flow; invoking it here too
+                            // would execute the same command a second time.)
                             if (onExecuteToolDirect != null) {
                                 val toolResult = onExecuteToolDirect.invoke(cmdType, target, value)
                                 val fuJson = JSONObject().apply {
@@ -799,27 +867,36 @@ class GeminiLiveSession(
     }
 
     private fun handleServerMessage(text: String) {
-        if (text.contains("\"error\"")) {
+        // Parse once up front. A transcript that merely CONTAINS the word "error"
+        // (e.g. the user saying "there was an error") must not kill the session,
+        // so only treat the message as a server error when the JSON actually
+        // carries an "error" key (or the payload is not JSON at all).
+        val jsonOrNull = runCatching { JSONObject(text) }.getOrNull()
+        val isServerError = jsonOrNull?.has("error") == true ||
+            (jsonOrNull == null && text.contains("\"error\""))
+        if (isServerError) {
             DesktopLogger.warn("Gemini Live server error: $text")
             checkAndTriggerModelFallback(text)
-            val err = runCatching { JSONObject(text).optJSONObject("error")?.optString("message") }.getOrNull()
+            val err = jsonOrNull?.optJSONObject("error")?.optString("message")
                 ?.takeIf { it.isNotBlank() } ?: text.take(200)
             setupSignal.completeExceptionally(IllegalStateException(err))
             onStatus("Live Error: $err")
             return
         }
 
-        if (text.contains("\"setupComplete\"")) {
+        if (jsonOrNull?.has("setupComplete") == true || text.contains("\"setupComplete\"")) {
             setupCompleteReceived = true
             connected = true
             setupSignal.complete(Unit)
+            // Flush any audio captured while the socket was not ready.
+            drainAudioBuffer()
             onStatus("Gemini Live Mode အသင့်ဖြစ်ပါပြီ")
             onSetupComplete()
             return
         }
 
         runCatching {
-            val json = JSONObject(text)
+            val json = jsonOrNull ?: JSONObject(text)
 
             if (json.has("toolCall")) {
                 val toolCall = json.getJSONObject("toolCall")
