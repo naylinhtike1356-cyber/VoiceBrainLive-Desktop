@@ -107,6 +107,31 @@ class ApiKeyStore {
         flush()
     }
 
+    /**
+     * Phase 1 — echo canceller selection for the audio pipeline.
+     * "suppression" (default, pure JVM) or "webrtc_aec3" (true full-duplex;
+     * needs webrtc_aec3.dll — see native/BUILD_WINDOWS.md).
+     *
+     * Overridable without UI via env var VBL_ECHO_CANCELLER or JVM property
+     * vbl.echo.canceller. Read once at engine construction; takes effect on
+     * the next app start.
+     */
+    fun loadEchoCancellerKind(): String {
+        val override = (System.getenv("VBL_ECHO_CANCELLER")
+            ?: System.getProperty("vbl.echo.canceller", "")).trim().lowercase()
+        if (override == "webrtc_aec3" || override == "suppression") return override
+        val stored = preferences.get(KEY_ECHO_CANCELLER, "suppression")
+        return com.example.voicebrainlive.desktop.platform.audio.EchoCancellerFactory.normalizeKind(stored)
+    }
+
+    fun saveEchoCancellerKind(kind: String) {
+        preferences.put(
+            KEY_ECHO_CANCELLER,
+            com.example.voicebrainlive.desktop.platform.audio.EchoCancellerFactory.normalizeKind(kind),
+        )
+        flush()
+    }
+
     fun loadRobotAlwaysOnTop(): Boolean = preferences.getBoolean(KEY_ROBOT_ALWAYS_ON_TOP, true)
 
     fun saveRobotAlwaysOnTop(value: Boolean) {
@@ -178,6 +203,7 @@ class ApiKeyStore {
         private const val KEY_ROBOT_ALWAYS_ON_TOP = "robot_always_on_top"
         private const val KEY_ROBOT_X = "robot_x"
         private const val KEY_ROBOT_Y = "robot_y"
+        private const val KEY_ECHO_CANCELLER = "audio_echo_canceller"
     }
 }
 

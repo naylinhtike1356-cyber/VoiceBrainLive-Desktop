@@ -149,7 +149,22 @@ class DesktopRuntime(
             },
             onAudioError = { message ->
                 controller.updateStatus("အသံစနစ် အခက်အခဲ: $message")
-            }
+            },
+            // Phase-2 turn-taking hooks: client-side VAD speech transitions.
+            // Logged for now; the server interruption protocol lands in Phase 2.
+            onUserSpeechStart = {
+                DesktopLogger.info("Turn-taking hook: user speech started (Phase 2 will signal server interruption)")
+            },
+            onUserSpeechEnd = {
+                DesktopLogger.info("Turn-taking hook: user speech ended (Phase 2 will handle turn commit)")
+            },
+            echoCancellerFactory = { isPlaying ->
+                com.example.voicebrainlive.desktop.platform.audio.EchoCancellerFactory.create(
+                    apiKeyStore.loadEchoCancellerKind(),
+                    isPlaying,
+                    onFallback = { message -> DesktopLogger.warn(message) },
+                )
+            },
         )
         if (key.isNotBlank()) {
             scope.launch {
@@ -515,6 +530,9 @@ class DesktopRuntime(
                 val report = watchdog.getHealthReport(audio.isCaptureActive() || audio.isSpeaking())
                 CommandResult(true, report.toSummary())
             }
+            "latency_report", "audio_latency" -> {
+                CommandResult(true, audio.getAudioLatencyReport())
+            }
             else -> commandExecutor.execute(command)
         }
     }
@@ -636,6 +654,8 @@ class DesktopRuntime(
         controller.updateListening(true)
         val microphoneStarted = audio.startMicrophone(
             onPcmChunk = { chunk ->
+                audio.noteUplinkAudioSent()
+                val sendStart = System.nanoTime()
                 if (session.isLiveReady()) {
                     session.sendAudioChunk(chunk)
                 } else {
@@ -645,6 +665,10 @@ class DesktopRuntime(
                         }
                     }
                 }
+                audio.latencyTracker.record(
+                    com.example.voicebrainlive.desktop.platform.audio.AudioStage.SESSION_SEND,
+                    System.nanoTime() - sendStart,
+                )
             },
             onVolumeLevel = { level -> _liveVolumeLevel.value = level },
             onSilenceDetected = {
