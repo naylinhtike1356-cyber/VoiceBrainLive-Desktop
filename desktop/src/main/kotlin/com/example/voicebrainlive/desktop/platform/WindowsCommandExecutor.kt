@@ -24,6 +24,25 @@ private data class AppSpec(val displayName: String, val command: String)
 
 private const val INDEX_TTL_MS = 60 * 60 * 1000L // 1 hour
 
+/**
+ * Phase 2 — file extensions the voice assistant must never launch via
+ * open_file. Desktop.open() executes these; a misheard filename must not
+ * become arbitrary code execution.
+ */
+private val EXECUTABLE_EXTENSIONS = setOf(
+    "exe", "msi", "msp", "mst", "msu",           // Windows installer/package
+    "bat", "cmd",                                // shell scripts
+    "ps1", "psm1",                               // PowerShell
+    "vbs", "vbe", "wsf", "wsh",                  // Windows Script Host
+    "js", "jse",                                 // JScript (executed by WSH, not the browser)
+    "scr", "com", "pif",                         // legacy executables
+    "reg",                                       // registry merge
+    "msc", "cpl",                                // consoles / control panel
+    "jar",                                       // Java executable
+    "hta", "gadget",                             // HTML applications / gadgets
+    "inf",                                       // setup information (can install drivers)
+)
+
 /** Windows-only commands. Laptop power, audio, window management, and universal app launcher. */
 class WindowsCommandExecutor : PlatformCommandExecutor {
     @Volatile
@@ -143,7 +162,13 @@ class WindowsCommandExecutor : PlatformCommandExecutor {
                 "show_desktop" -> osHands.pressKeyCombo("win+d")
                 "get_active_window", "active_window_context", "active_app", "what_am_i_doing" -> getActiveWindowSummary()
                 "open_app", "launch_app" -> openApp(command.target ?: command.value.orEmpty())
-                "close_app", "stop_app" -> closeApp(command.target ?: command.value.orEmpty())
+                "close_app", "stop_app" -> {
+                    val confirmed = command.value == "confirmed"
+                    // On the confirmed second pass the app name travels in
+                    // target; value carries only the confirmation marker.
+                    val name = command.target ?: if (confirmed) "" else command.value.orEmpty()
+                    closeApp(name, confirmed)
+                }
                 "open_url" -> openUrl(command.target ?: command.value.orEmpty())
                 "search_web", "web_search" -> searchWeb(command.target ?: command.value.orEmpty())
                 "search_youtube", "youtube_search" -> searchYouTube(command.target ?: command.value.orEmpty())
@@ -155,7 +180,7 @@ class WindowsCommandExecutor : PlatformCommandExecutor {
                 "open_documents" -> openFolder(System.getProperty("user.home") + "\\Documents")
                 "open_desktop" -> openFolder(System.getProperty("user.home") + "\\Desktop")
                 "open_recycle_bin" -> openShellFolder("shell:RecycleBinFolder", "Recycle Bin")
-                "empty_recycle_bin" -> emptyRecycleBin()
+                "empty_recycle_bin" -> emptyRecycleBin(confirmed = command.value == "confirmed")
                 "get_current_time", "current_time", "time" -> getCurrentTime()
                 "get_current_date", "current_date", "date" -> getCurrentDate()
                 "optimize_ram" -> {
@@ -402,7 +427,20 @@ class WindowsCommandExecutor : PlatformCommandExecutor {
         return null
     }
 
-    private fun closeApp(rawName: String): CommandResult {
+    /**
+     * Phase 2 — forced process termination always uses /F (data loss
+     * possible), so the first pass never executes: it returns
+     * requiresConfirmation and only the voice-confirmed second pass
+     * (value == "confirmed") actually kills anything.
+     */
+    private fun closeApp(rawName: String, confirmed: Boolean): CommandResult {
+        if (!confirmed) {
+            return CommandResult(
+                success = false,
+                message = "‘${rawName.trim()}’ app ကို အတင်းပိတ်ပါမယ် (မသိမ်းရသေးသော အလုပ်များ ဆုံးရှုံးနိုင်ပါသည်)။",
+                requiresConfirmation = true,
+            )
+        }
         val burmeseVerbs = listOf("ပိတ်ပေးပါ", "ပိတ်ပါ", "ပိတ်ပေး", "ပိတ်မယ်", "ပိတ်လိုက်ပါ", "ပိတ်", "ဆော့ဖ်ဝဲ", "app", "application", "close", "kill", "stop", "terminate")
         var clean = rawName.trim().lowercase()
         for (verb in burmeseVerbs) {
@@ -546,6 +584,18 @@ class WindowsCommandExecutor : PlatformCommandExecutor {
             return CommandResult(false, "‘$query’ ဟု အမည်ရသော file ကို ဖွင့်ရန် ရှာမတွေ့ပါရှင်။")
         }
 
+        // SECURITY (Phase 2): never launch executable/script file types via
+        // voice. Desktop.open() would execute them — refuse outright instead
+        // of asking, since a misheard confirmation could run malware.
+        val ext = target.extension.lowercase()
+        if (ext in EXECUTABLE_EXTENSIONS) {
+            DesktopLogger.warn("Refused to open executable file type via voice: name=${target.name} ext=$ext")
+            return CommandResult(
+                false,
+                "‘${target.name}’ ကို အသံဖြင့် ဖွင့်မပေးပါရှင် — .$ext file တွေက program/script ဖြစ်နိုင်လို့ လုံခြုံရေးအရ ကိုယ်တိုင် ဖွင့်ပေးပါ။",
+            )
+        }
+
         Desktop.getDesktop().open(target)
         return CommandResult(true, "File ကို ဖွင့်လိုက်ပါပြီရှင်: ${target.name}")
     }
@@ -562,9 +612,28 @@ class WindowsCommandExecutor : PlatformCommandExecutor {
         return CommandResult(true, "$label ကို ဖွင့်လိုက်ပါပြီရှင်။")
     }
 
-    private fun emptyRecycleBin(): CommandResult {
-        ProcessBuilder("powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", "Clear-RecycleBin -Force -ErrorAction SilentlyContinue").start()
-        return CommandResult(true, "Recycle Bin ကို သန့်ရှင်းလိုက်ပါပြီရှင်။")
+    /**
+     * Phase 2 — irreversible (files are permanently deleted), so the first
+     * pass only requests voice confirmation; the confirmed second pass
+     * performs the deletion.
+     */
+    private fun emptyRecycleBin(confirmed: Boolean): CommandResult {
+        if (!confirmed) {
+            return CommandResult(
+                success = false,
+                message = "Recycle Bin ထဲက အရာအားလုံးကို အပြီးတိုင် ဖျက်ပါမယ်။",
+                requiresConfirmation = true,
+            )
+        }
+        val ok = runCatching {
+            ProcessBuilder("powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", "Clear-RecycleBin -Force -ErrorAction SilentlyContinue").start()
+            true
+        }.getOrDefault(false)
+        return if (ok) {
+            CommandResult(true, "Recycle Bin ကို သန့်ရှင်းလိုက်ပါပြီရှင်။")
+        } else {
+            CommandResult(false, "Recycle Bin ရှင်းရာတွင် အခက်အခဲရှိပါတယ်ရှင်။")
+        }
     }
 
     private fun takeScreenshot(): CommandResult {
