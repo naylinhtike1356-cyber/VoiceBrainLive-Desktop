@@ -376,29 +376,50 @@ class WindowsCommandExecutor : PlatformCommandExecutor {
             return CommandResult(true, "$rawName ကို ဖွင့်လိုက်ပါပြီရှင်။")
         }
 
-        // 6. Direct fallback via shell start — only for names that cannot possibly
-        // contain cmd.exe metacharacters. Anything else is rejected instead of
-        // being handed to a shell.
-        val shellSafeName = Regex("^[A-Za-z0-9 .+_\\-]{1,64}$")
-        if (!shellSafeName.matches(clean)) {
-            return CommandResult(
-                false,
-                "‘$rawName’ ဆော့ဖ်ဝဲလ်ကို ကွန်ပျူတာထဲတွင် ရှာမတွေ့ပါ။ အမည်မှန်ကန်ကြောင်း စစ်ဆေးပေးပါရှင်။",
-            )
-        }
-        val fallbackSuccess = runCatching {
-            ProcessBuilder("cmd", "/c", "start", "", clean).start()
-            true
-        }.getOrDefault(false)
-
-        if (fallbackSuccess) {
-            return CommandResult(true, "$rawName ကို ဖွင့်ရန် ညွှန်ကြားလိုက်ပါပြီရှင်။")
+        // 6. App Paths registry lookup — only names that resolve to a real
+        // executable reach the shell. A blind `start` always "succeeds" at
+        // spawn time even for names that don't exist, so anything
+        // unresolvable is rejected instead of being reported as launched.
+        val appPathsTarget = findViaAppPaths(clean)
+        if (appPathsTarget != null) {
+            ProcessBuilder("cmd", "/c", "start", "", appPathsTarget).start()
+            return CommandResult(true, "$rawName ကို ဖွင့်လိုက်ပါပြီရှင်။")
         }
 
         return CommandResult(
             false,
             "‘$rawName’ ဆော့ဖ်ဝဲလ်ကို ကွန်ပျူတာထဲတွင် ရှာမတွေ့ပါ။ အမည်မှန်ကန်ကြောင်း စစ်ဆေးပေးပါရှင်။",
         )
+    }
+
+
+    /**
+     * Resolves a bare app name through the Windows "App Paths" registry keys
+     * (HKLM/HKCU ...\App Paths\<name>.exe), which is how `start` finds
+     * executables that are not on PATH (e.g. winword). Returns the absolute
+     * executable path, or null when the name resolves to nothing.
+     */
+    private fun findViaAppPaths(name: String): String? {
+        val exe = if (name.endsWith(".exe", ignoreCase = true)) name else "$name.exe"
+        for (root in listOf("HKLM", "HKCU")) {
+            val target = runCatching {
+                val proc = ProcessBuilder(
+                    "reg", "query",
+                    "$root\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\$exe",
+                    "/ve",
+                ).start()
+                val out = proc.inputStream.bufferedReader().readText()
+                proc.waitFor()
+                // Success output contains a line like:
+                //     (Default)    REG_SZ    C:\Path\app.exe
+                out.lineSequence()
+                    .firstOrNull { it.contains("REG_SZ") }
+                    ?.substringAfter("REG_SZ")?.trim()
+                    ?.takeIf { it.isNotBlank() && File(it).exists() }
+            }.getOrNull()
+            if (target != null) return target
+        }
+        return null
     }
 
     private fun findStartMenuShortcut(query: String): File? {
@@ -446,7 +467,12 @@ class WindowsCommandExecutor : PlatformCommandExecutor {
         for (verb in burmeseVerbs) {
             clean = clean.replace(verb, "").trim()
         }
-        if (clean.isBlank()) clean = rawName.trim().lowercase()
+        // Blank input must never reach the lookup chain: for a blank query,
+        // `"".contains("")` is true, so it would fuzzy-match the first
+        // catalog entry and kill an arbitrary app.
+        if (clean.isBlank()) {
+            return CommandResult(false, "App အမည် မပါဝင်ပါ — ပိတ်လိုသော App အမည်ကို ပြောပေးပါရှင်။")
+        }
         val normalized = normalize(clean)
 
         // 1. Static match
