@@ -1,6 +1,7 @@
 package com.example.voicebrainlive.desktop.core
 
 import org.json.JSONObject
+import com.example.voicebrainlive.desktop.platform.DesktopLogger
 import java.io.File
 
 /**
@@ -50,6 +51,9 @@ class ProfileManager(
                     }
                 }
             }
+        }.onFailure {
+            DesktopLogger.warn("Failed to load profiles: ${it.message}")
+            AtomicFileIO.backupCorruptFile(profileFile, it.message ?: "parse error")
         }
     }
 
@@ -59,7 +63,7 @@ class ProfileManager(
             val json = JSONObject()
             json.put("active_profile", activeProfile)
             json.put("profiles", profiles)
-            profileFile.writeText(json.toString(2), Charsets.UTF_8)
+            AtomicFileIO.writeTextAtomic(profileFile, json.toString(2))
         }
     }
 }

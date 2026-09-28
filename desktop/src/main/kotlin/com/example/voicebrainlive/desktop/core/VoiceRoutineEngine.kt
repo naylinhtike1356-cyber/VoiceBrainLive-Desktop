@@ -213,6 +213,7 @@ class VoiceRoutineEngine(
             }
         }.onFailure {
             DesktopLogger.warn("Failed to load voice routines: ${it.message}")
+            AtomicFileIO.backupCorruptFile(routinesFile, it.message ?: "parse error")
         }
     }
 
@@ -244,7 +245,7 @@ class VoiceRoutineEngine(
                 obj.put("enabled", r.enabled)
                 arr.put(obj)
             }
-            routinesFile.writeText(arr.toString(2), Charsets.UTF_8)
+            AtomicFileIO.writeTextAtomic(routinesFile, arr.toString(2))
         }.onFailure {
             DesktopLogger.warn("Failed to save voice routines: ${it.message}")
         }

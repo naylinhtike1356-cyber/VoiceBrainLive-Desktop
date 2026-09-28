@@ -1,10 +1,42 @@
+# IntelliJ / Android Studio
 *.iml
+.idea/
+# Gradle
 .gradle/
-/local.properties
-/.idea/
+build/
+out/
+bin/
+**/build/
+# Kotlin compiler daemon error logs
+.kotlin/
+# App / build logs
+logs/
+*.log
+# Local config & secrets (never commit)
+local.properties
+.env
+*.env
+# Scratch / experiments
+scratch/
+New Text Document.txt
+*.bak
+*.orig
+# Compiled artifacts
+*.class
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
+*.exe
+*.dll
+*.so
+*.dylib
+# Packaged app outputs
+*.msi
+*.dmg
+*.zip
+# OS
 .DS_Store
-/build/
-/app/build/
-captures/
-.externalNativeBuild/
-.cxx/
+Thumbs.db
+# Legacy backup copy build outputs
+legacy-desktop-copy-from-phone/build/
+legacy-desktop-copy-from-phone/.gradle/
+legacy-desktop-copy-from-phone/.kotlin/

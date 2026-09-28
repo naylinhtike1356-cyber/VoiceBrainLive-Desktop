@@ -2,6 +2,7 @@ package com.example.voicebrainlive.desktop.core
 
 import org.json.JSONArray
 import org.json.JSONObject
+import com.example.voicebrainlive.desktop.platform.DesktopLogger
 import java.io.File
 import java.util.UUID
 
@@ -282,6 +283,10 @@ class UserMemoryStore(
                     )
                 }
             }
+        }.onFailure {
+            DesktopLogger.warn("Failed to load user memories: ${it.message}")
+            AtomicFileIO.backupCorruptFile(memoryFile, it.message ?: "parse error")
+            AtomicFileIO.backupCorruptFile(unifiedFile, it.message ?: "parse error")
         }
     }
 
@@ -291,7 +296,7 @@ class UserMemoryStore(
             memoryFile.parentFile?.mkdirs()
             val json = JSONObject()
             memoryData.forEach { (k, v) -> json.put(k, v) }
-            memoryFile.writeText(json.toString(2), Charsets.UTF_8)
+            AtomicFileIO.writeTextAtomic(memoryFile, json.toString(2))
 
             val arr = JSONArray()
             unifiedItems.forEach { item ->
@@ -308,7 +313,7 @@ class UserMemoryStore(
                 obj.put("isEditable", item.isEditable)
                 arr.put(obj)
             }
-            unifiedFile.writeText(arr.toString(2), Charsets.UTF_8)
+            AtomicFileIO.writeTextAtomic(unifiedFile, arr.toString(2))
         }
     }
 }
