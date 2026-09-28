@@ -97,6 +97,9 @@ class DesktopRuntime(
     @Volatile private var closed = false
     @Volatile private var liveAudioReceivedForTurn = false
     @Volatile private var userSpeechDetectedForTurn = false
+
+    /** Throttles the periodic rolling audio-latency telemetry log (no audio contents). */
+    @Volatile private var lastLatencyReportLogMs = 0L
     private val inputTranscriptBuffer = StringBuilder()
     private val preSetupAudioBuffer = mutableListOf<String>()
 
@@ -669,6 +672,13 @@ class DesktopRuntime(
                     com.example.voicebrainlive.desktop.platform.audio.AudioStage.SESSION_SEND,
                     System.nanoTime() - sendStart,
                 )
+                // Bounded periodic telemetry (<= 1/min): rolling p50/p95 per
+                // stage. No audio or transcript contents are ever logged.
+                val nowMs = System.currentTimeMillis()
+                if (nowMs - lastLatencyReportLogMs >= 60_000L) {
+                    lastLatencyReportLogMs = nowMs
+                    DesktopLogger.info("Audio latency rolling p50/p95 (ms):\n${audio.getAudioLatencyReport()}")
+                }
             },
             onVolumeLevel = { level -> _liveVolumeLevel.value = level },
             onSilenceDetected = {

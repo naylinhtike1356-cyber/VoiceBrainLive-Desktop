@@ -42,6 +42,11 @@ class JavaxSoundRenderer(
 
     var playbackListener: PlaybackListener? = null
 
+    private var playingStateListener: ((Boolean) -> Unit)? = null
+    override fun setPlayingStateListener(listener: ((Boolean) -> Unit)?) {
+        playingStateListener = listener
+    }
+
     /** Set when the first chunk of a burst is enqueued; used for jitter telemetry. */
     @Volatile private var burstEnqueueNanos = 0L
 
@@ -82,6 +87,7 @@ class JavaxSoundRenderer(
         if (playing != value) {
             playing = value
             playbackListener?.onBurstStateChanged(value)
+            playingStateListener?.invoke(value)
         }
     }
 

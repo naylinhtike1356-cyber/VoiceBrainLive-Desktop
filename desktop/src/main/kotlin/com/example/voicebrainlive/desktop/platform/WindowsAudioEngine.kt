@@ -9,7 +9,6 @@ import com.example.voicebrainlive.desktop.platform.audio.EchoCanceller
 import com.example.voicebrainlive.desktop.platform.audio.EchoDecision
 import com.example.voicebrainlive.desktop.platform.audio.JavaxSoundCapture
 import com.example.voicebrainlive.desktop.platform.audio.JavaxSoundRenderer
-import com.example.voicebrainlive.desktop.platform.audio.PlaybackListener
 import com.example.voicebrainlive.desktop.platform.audio.SpectralVad
 import com.example.voicebrainlive.desktop.platform.audio.SuppressionEchoCanceller
 import com.example.voicebrainlive.desktop.platform.audio.VoiceActivityDetector
@@ -57,7 +56,7 @@ class WindowsAudioEngine(
     echoCancellerFactory: ((isPlaying: () -> Boolean) -> EchoCanceller)? = null,
     val latencyTracker: AudioLatencyTracker = AudioLatencyTracker(),
     private val vad: VoiceActivityDetector = SpectralVad(),
-) : PlaybackListener {
+) {
 
     private val renderer: AudioRenderer =
         (rendererFactory ?: { tracker -> JavaxSoundRenderer(onAudioError, tracker) })(latencyTracker)
@@ -85,15 +84,22 @@ class WindowsAudioEngine(
         internal set
 
     init {
-        (renderer as? JavaxSoundRenderer)?.playbackListener = this
+        // Burst transitions drive speaking state and anchor the post-playback
+        // echo-cooldown at the *actual* end of audio (not at enqueue time).
+        renderer.setPlayingStateListener { playing -> onBurstStateChanged(playing) }
         DesktopLogger.info("Audio engine: echoCanceller=${echoCanceller.kind} fullDuplex=${echoCanceller.isFullDuplexCapable}")
     }
 
-    //region PlaybackListener
-    override fun onBurstStateChanged(playing: Boolean) {
+    private fun onBurstStateChanged(playing: Boolean) {
+        if (!playing) {
+            // Natural end of playback (or stopPlayback): timestamp the actual
+            // completion so the reverb guard covers real room decay.
+            // engine.stopPlayback() clears this right after for intentional
+            // stops (barge-in), opening the mic immediately.
+            lastPlaybackTime = System.currentTimeMillis()
+        }
         setSpeakingState(playing)
     }
-    //endregion
 
     private fun setSpeakingState(speaking: Boolean) {
         if (isSpeaking != speaking) {
@@ -205,10 +211,13 @@ class WindowsAudioEngine(
 
             when (decision) {
                 is EchoDecision.BargeIn -> {
-                    // Confirmed user interruption: stop assistant playback immediately.
+                    // Confirmed user interruption: stop assistant playback immediately,
+                    // then forward the held onset frame first so the first syllable
+                    // is not clipped.
                     DesktopLogger.info("Audio telemetry: User barge-in detected, stopping playback")
                     stopPlayback()
                     handleSpeechOnset()
+                    decision.firstFrame?.let { forwardChunk(it) }
                     forwardChunk(decision.frame)
                 }
                 is EchoDecision.Forward -> {
@@ -289,7 +298,9 @@ class WindowsAudioEngine(
 
     private fun enqueueRenderBytes(data: ByteArray) {
         val aligned = if (data.size % 2 != 0) data.copyOf(data.size - 1) else data
-        lastPlaybackTime = System.currentTimeMillis()
+        // NOTE: lastPlaybackTime is anchored by the renderer's natural-end
+        // burst callback (onBurstStateChanged(false)), not here, so the echo
+        // cooldown starts at actual playback completion.
         rememberRenderReference(aligned)
         renderer.enqueuePcm16(aligned)
         // TTFA: first response chunk after uplink activity approximates

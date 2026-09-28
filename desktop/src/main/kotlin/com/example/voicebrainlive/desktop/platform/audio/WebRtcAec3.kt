@@ -71,7 +71,9 @@ class WebRtcAec3EchoCanceller(
         } else {
             micFrame
         }
-        return if (speechDetected && isPlaying()) EchoDecision.BargeIn(cleaned)
+        // The mic stays open in AEC3 mode (echo is removed in-place), so there
+        // is no held onset frame — firstFrame is null.
+        return if (speechDetected && isPlaying()) EchoDecision.BargeIn(null, cleaned)
         else EchoDecision.Forward(cleaned)
     }
 

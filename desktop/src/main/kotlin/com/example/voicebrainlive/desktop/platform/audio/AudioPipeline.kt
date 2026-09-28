@@ -43,6 +43,14 @@ interface AudioRenderer {
     val isPlaying: Boolean
 
     val droppedChunkCount: Long
+
+    /**
+     * Registers a listener invoked on playing-state transitions (burst start,
+     * natural end, stop). The orchestrator uses the natural-end transition
+     * to anchor the post-playback echo-cooldown timestamp. Default no-op.
+     */
+    fun setPlayingStateListener(listener: ((Boolean) -> Unit)?) {}
+
     fun close()
 }
 
@@ -76,9 +84,19 @@ sealed interface EchoDecision {
 
     /**
      * Confirmed user interruption while the assistant was speaking.
-     * The orchestrator must stop playback immediately, then forward [frame].
+     * The orchestrator must stop playback immediately, then forward
+     * [firstFrame] (the held speech-onset frame, when present) followed
+     * by [frame], so the first syllable is never clipped.
      */
-    data class BargeIn(val frame: ByteArray) : EchoDecision
+    data class BargeIn(val firstFrame: ByteArray?, val frame: ByteArray) : EchoDecision {
+        override fun equals(other: Any?): Boolean {
+            if (this === other) return true
+            if (other !is BargeIn) return false
+            return (firstFrame == null) == (other.firstFrame == null) && frame.contentEquals(other.frame)
+        }
+
+        override fun hashCode(): Int = 31 * (firstFrame?.size ?: 0) + frame.contentHashCode()
+    }
 }
 
 /**

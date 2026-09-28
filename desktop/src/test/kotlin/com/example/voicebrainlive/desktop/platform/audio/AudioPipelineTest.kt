@@ -37,6 +37,19 @@ private class FakeRenderer : AudioRenderer {
     var playingState = false
     var stopCount = 0
         private set
+    private var playingListener: ((Boolean) -> Unit)? = null
+
+    override fun setPlayingStateListener(listener: ((Boolean) -> Unit)?) {
+        playingListener = listener
+    }
+
+    /** Simulates the renderer firing a burst transition (start / natural end). */
+    fun setPlaying(value: Boolean) {
+        if (playingState != value) {
+            playingState = value
+            playingListener?.invoke(value)
+        }
+    }
 
     override fun enqueuePcm16(data: ByteArray): Boolean {
         enqueued.add(data)
@@ -45,7 +58,7 @@ private class FakeRenderer : AudioRenderer {
 
     override fun stopPlayback() {
         stopCount++
-        playingState = false
+        setPlaying(false)
         enqueued.clear()
     }
 
@@ -102,12 +115,16 @@ class AudioPipelineTest {
     fun suppressionSuppressesDuringPlaybackUntilBargeIn() {
         val canceller = SuppressionEchoCanceller(isPlaying = { true })
         val frame = burstFrame(0)
-        // First speech frame: held for confirmation.
+        // First speech frame: held for confirmation, not forwarded.
         assertTrue(canceller.processCapture(frame, null, speechDetected = true) is EchoDecision.Suppress)
-        // Second consecutive speech frame: confirmed barge-in.
+        // Second consecutive speech frame: confirmed barge-in; the held onset
+        // frame is returned so the first syllable is preserved.
         val second = canceller.processCapture(frame, null, speechDetected = true)
         assertTrue(second is EchoDecision.BargeIn)
-        // Non-speech resets the confirmation counter.
+        second as EchoDecision.BargeIn
+        assertTrue("onset frame must be preserved", second.firstFrame?.contentEquals(frame) == true)
+        assertTrue(second.frame.contentEquals(frame))
+        // Non-speech resets the confirmation counter and drops the held frame.
         assertTrue(canceller.processCapture(frame, null, speechDetected = false) is EchoDecision.Suppress)
         assertTrue(canceller.processCapture(frame, null, speechDetected = true) is EchoDecision.Suppress)
     }
@@ -189,10 +206,31 @@ class AudioPipelineTest {
         assertEquals(0, h.renderer.stopCount)
 
         // Deliberate interruption: VAD-confirmed barge-in stops playback.
+        // The held onset frame + confirming frame + following frames are forwarded.
         repeat(4) { i -> h.feed(burstFrame(i)) }
         assertEquals("barge-in must stop playback", 1, h.renderer.stopCount)
         assertFalse(h.renderer.playingState)
-        assertTrue("barge-in audio must be forwarded, got ${h.forwarded.size}", h.forwarded.isNotEmpty())
+        assertEquals("onset + 3 speech frames must be forwarded", 4, h.forwarded.size)
+        assertEquals(1, h.speechStarted)
+        h.close()
+    }
+
+    @Test
+    fun naturalEndStartsEchoCooldownButBargeInCutsThrough() {
+        val h = Harness()
+        assertTrue(h.start())
+        // Assistant playback ends naturally -> echo cooldown anchors at the
+        // actual completion time.
+        h.renderer.setPlaying(true)
+        h.renderer.setPlaying(false)
+        // Ambient noise inside the cooldown window stays suppressed.
+        repeat(2) { h.feed(noiseFrame()) }
+        assertTrue(h.forwarded.isEmpty())
+        // A VAD-confirmed barge-in still cuts through during the cooldown,
+        // with the onset frame preserved.
+        repeat(2) { i -> h.feed(burstFrame(i)) }
+        assertEquals(2, h.forwarded.size)
+        assertEquals(1, h.renderer.stopCount)
         assertEquals(1, h.speechStarted)
         h.close()
     }
