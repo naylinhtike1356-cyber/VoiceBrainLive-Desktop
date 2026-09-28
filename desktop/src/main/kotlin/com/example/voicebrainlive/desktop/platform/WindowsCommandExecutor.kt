@@ -3,6 +3,7 @@ package com.example.voicebrainlive.desktop.platform
 import com.example.voicebrainlive.desktop.core.CommandResult
 import com.example.voicebrainlive.desktop.core.DesktopCommand
 import com.example.voicebrainlive.desktop.core.PlatformCommandExecutor
+import com.example.voicebrainlive.desktop.core.PowerShellQueryPolicy
 import com.example.voicebrainlive.desktop.automation.AndroidBuildPipeline
 import com.example.voicebrainlive.desktop.automation.AndroidEmulatorRunner
 import com.example.voicebrainlive.desktop.automation.AntigravityBridge
@@ -367,19 +368,30 @@ class WindowsCommandExecutor : PlatformCommandExecutor {
             }
         }
 
-        // 5. Try where.exe
-        val whereCheck = runCatching {
+        // 5. Try where.exe — resolve to an absolute path and launch THAT, never the
+        // raw voice text (cmd.exe would interpret &, |, " etc. as metacharacters).
+        val resolvedViaWhere = runCatching {
             val proc = ProcessBuilder("where.exe", clean).start()
+            val first = proc.inputStream.bufferedReader().readLine()?.trim()
             proc.waitFor()
-            proc.exitValue() == 0
-        }.getOrDefault(false)
+            first?.takeIf { it.isNotBlank() && File(it).exists() }
+        }.getOrNull()
 
-        if (whereCheck) {
-            ProcessBuilder("cmd", "/c", "start", "", clean).start()
+        if (resolvedViaWhere != null) {
+            ProcessBuilder("cmd", "/c", "start", "", resolvedViaWhere).start()
             return CommandResult(true, "$rawName ကို ဖွင့်လိုက်ပါပြီရှင်။")
         }
 
-        // 6. Direct fallback via shell start
+        // 6. Direct fallback via shell start — only for names that cannot possibly
+        // contain cmd.exe metacharacters. Anything else is rejected instead of
+        // being handed to a shell.
+        val shellSafeName = Regex("^[A-Za-z0-9 .+_\\-]{1,64}$")
+        if (!shellSafeName.matches(clean)) {
+            return CommandResult(
+                false,
+                "‘$rawName’ ဆော့ဖ်ဝဲလ်ကို ကွန်ပျူတာထဲတွင် ရှာမတွေ့ပါ။ အမည်မှန်ကန်ကြောင်း စစ်ဆေးပေးပါရှင်။",
+            )
+        }
         val fallbackSuccess = runCatching {
             ProcessBuilder("cmd", "/c", "start", "", clean).start()
             true
@@ -438,10 +450,15 @@ class WindowsCommandExecutor : PlatformCommandExecutor {
             return CommandResult(true, "${spec.displayName} ကို ပိတ်လိုက်ပါပြီရှင်။")
         }
 
-        // 2. Dynamic process search and termination via PowerShell
+        // 2. Dynamic process search and termination via PowerShell.
+        // SECURITY: the search term is passed via an environment variable and the
+        // script is fully static — a quote in the app name cannot break out and
+        // inject PowerShell. ($env: values are not re-parsed as code.)
         val killed = runCatching {
-            val script = "Get-Process | Where-Object { \$_.ProcessName -like '*$clean*' -or \$_.MainWindowTitle -like '*$clean*' } | Stop-Process -Force -PassThru | Select-Object -ExpandProperty ProcessName"
-            val proc = ProcessBuilder("powershell.exe", "-NoProfile", "-Command", script).start()
+            val script = "Get-Process | Where-Object { \$_.ProcessName -like \"*\$env:VBL_CLOSE_PATTERN*\" -or \$_.MainWindowTitle -like \"*\$env:VBL_CLOSE_PATTERN*\" } | Stop-Process -Force -PassThru | Select-Object -ExpandProperty ProcessName"
+            val proc = ProcessBuilder("powershell.exe", "-NoProfile", "-Command", script)
+                .apply { environment()["VBL_CLOSE_PATTERN"] = clean }
+                .start()
             val out = proc.inputStream.bufferedReader().readLines().filter { it.isNotBlank() }
             out.isNotEmpty()
         }.getOrDefault(false)
@@ -816,14 +833,17 @@ class WindowsCommandExecutor : PlatformCommandExecutor {
         }
     }
 
+    /**
+     * Runs a PowerShell query guarded by [PowerShellQueryPolicy] (strict allowlist
+     * of read-only cmdlets — see that object for the security rationale).
+     */
     private fun runPowerShellSafe(command: String): CommandResult {
-        val clean = command.trim()
-        val forbidden = listOf("del", "rm", "remove-item", "format", "format-volume", "stop-computer", "invoke-expression", "iex")
-        if (forbidden.any { clean.lowercase().startsWith(it) || clean.lowercase().contains(" $it ") }) {
-            return CommandResult(false, "လုံခြုံရေးအရ ဤ PowerShell အမိန့်ကို တိုက်ရိုက် run ခွင့်မပြုပါရှင်။")
+        PowerShellQueryPolicy.validate(command)?.let { reason ->
+            return CommandResult(false, reason)
         }
+        val clean = command.trim()
         return runCatching {
-            val proc = ProcessBuilder("powershell.exe", "-NoProfile", "-Command", clean).start()
+            val proc = ProcessBuilder("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", clean).start()
             val out = proc.inputStream.bufferedReader().readText().trim()
             val err = proc.errorStream.bufferedReader().readText().trim()
             val resultText = if (out.isNotBlank()) out else err

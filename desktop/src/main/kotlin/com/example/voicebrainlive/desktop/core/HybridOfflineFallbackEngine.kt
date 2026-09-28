@@ -80,15 +80,24 @@ class HybridOfflineFallbackEngine(
 
     /**
      * Verbal audio feedback using Windows SAPI SpeechSynthesizer without requiring internet.
+     *
+     * SECURITY: the message is passed to PowerShell via an environment variable
+     * and the script itself is fully static. The message text never goes through
+     * the PowerShell parser, so `$()`, backticks, quotes, or other metacharacters
+     * in clipboard/filename/window-title content cannot execute code.
      */
     fun speakOfflineFeedback(message: String) {
         scope.launch {
             runCatching {
-                val clean = message.replace("\"", "\\\"").take(200)
-                val psCommand = "Add-Type -AssemblyName System.Speech; \$synth = New-Object System.Speech.Synthesis.SpeechSynthesizer; \$synth.Speak(\"$clean\")"
-                ProcessBuilder("powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", psCommand)
-                    .start()
-                    .waitFor(3, TimeUnit.SECONDS)
+                val psCommand = "Add-Type -AssemblyName System.Speech; " +
+                    "\$synth = New-Object System.Speech.Synthesis.SpeechSynthesizer; " +
+                    "\$synth.Speak(\$env:VBL_TTS_TEXT)"
+                ProcessBuilder(
+                    "powershell.exe", "-NoProfile", "-NonInteractive",
+                    "-WindowStyle", "Hidden", "-Command", psCommand
+                ).apply {
+                    environment()["VBL_TTS_TEXT"] = message.take(200)
+                }.start().waitFor(3, TimeUnit.SECONDS)
             }.onFailure {
                 DesktopLogger.warn("Offline TTS output warning: ${it.message}")
             }
