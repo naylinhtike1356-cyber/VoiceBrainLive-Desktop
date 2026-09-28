@@ -35,6 +35,15 @@ class JavaxSoundCapture(
     @Volatile private var active = false
     override val isActive: Boolean get() = active
 
+    companion object {
+        /**
+         * Explicit capture hardware buffer: 4 frames (~128 ms @ 16 kHz).
+         * Small enough to keep capture latency low, large enough to absorb
+         * scheduling jitter without overruns.
+         */
+        private const val CAPTURE_LINE_BUFFER_BYTES = 4_096
+    }
+
     private fun format() = AudioFormat(
         AudioFormat.Encoding.PCM_SIGNED,
         sampleRateHz,
@@ -65,14 +74,16 @@ class JavaxSoundCapture(
                 AudioSystem.getTargetDataLine(fmt)
             }
             line.also {
-                it.open(fmt)
+                // Explicit small hardware buffer (~128 ms): the JVM default is
+                // often 1 s+, which adds a full second of capture latency.
+                it.open(fmt, CAPTURE_LINE_BUFFER_BYTES)
                 it.start()
             }
         }.recoverCatching {
             val fmt = format()
             val info = DataLine.Info(TargetDataLine::class.java, fmt)
             (AudioSystem.getLine(info) as TargetDataLine).also {
-                it.open(fmt)
+                it.open(fmt, CAPTURE_LINE_BUFFER_BYTES)
                 it.start()
             }
         }.getOrNull()

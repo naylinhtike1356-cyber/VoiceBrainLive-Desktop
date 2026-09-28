@@ -1,5 +1,8 @@
 package com.example.voicebrainlive.desktop.platform.audio
 
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+
 /**
  * Phase 1 — Full-duplex audio pipeline contracts.
  *
@@ -41,6 +44,14 @@ interface AudioRenderer {
 
     /** True while audio is queued or the line is actively rendering. */
     val isPlaying: Boolean
+
+    /**
+     * Honest playback meter: RMS (0..1) of the most recently written chunk,
+     * pre-gain. Drives the speaking-state orb visualization. Default is a
+     * dead 0-level flow so test fakes compile unchanged.
+     */
+    val playbackLevel: StateFlow<Float>
+        get() = MutableStateFlow(0f)
 
     val droppedChunkCount: Long
 

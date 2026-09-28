@@ -1,6 +1,9 @@
 package com.example.voicebrainlive.desktop.platform.audio
 
 import com.example.voicebrainlive.desktop.platform.DesktopLogger
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
@@ -13,7 +16,7 @@ import javax.sound.sampled.SourceDataLine
  * javax.sound-based playback (default [AudioRenderer]).
  *
  * Owns the output line and the playback worker: anti-stutter pre-buffering
- * (~120 ms), gap-tolerant streaming, and device hot-plug re-acquire.
+ * (~60 ms), gap-tolerant streaming, and device hot-plug re-acquire.
  * Reports burst transitions to [playbackListener] so the orchestrator can
  * maintain speaking state, and records RENDER + JITTER_BUFFER telemetry.
  *
@@ -26,9 +29,9 @@ class JavaxSoundRenderer(
 
     companion object {
         private const val OUTPUT_SAMPLE_RATE = 24_000f
-        private const val JITTER_PREBUFFER_BYTES = 5_760 // ~120 ms @ 24 kHz 16-bit mono
+        private const val JITTER_PREBUFFER_BYTES = 2_880 // ~60 ms @ 24 kHz 16-bit mono (S2S: first byte sooner)
         private const val LINE_BUFFER_SIZE = 28_800 // ~600 ms hardware buffer
-        private const val PLAYBACK_GAP_GRACE_MS = 900L // tolerate network packet jitter
+        private const val PLAYBACK_GAP_GRACE_MS = 350L // tolerate small network jitter; fail fast on dead streams
     }
 
     private val audioQueue = LinkedBlockingQueue<ByteArray>(200)
@@ -36,6 +39,13 @@ class JavaxSoundRenderer(
     private var worker: Thread? = null
     private val dropped = AtomicLong(0)
     override val droppedChunkCount: Long get() = dropped.get()
+
+    /**
+     * Honest playback meter: RMS (0..1) of the most recently written chunk,
+     * measured pre-gain so the speaking orb reflects real output energy.
+     */
+    private val _playbackLevel = MutableStateFlow(0f)
+    override val playbackLevel: StateFlow<Float> = _playbackLevel.asStateFlow()
 
     @Volatile private var playing = false
     override val isPlaying: Boolean get() = playing || audioQueue.isNotEmpty()
@@ -86,6 +96,7 @@ class JavaxSoundRenderer(
     private fun setPlaying(value: Boolean) {
         if (playing != value) {
             playing = value
+            if (!value) _playbackLevel.value = 0f
             playbackListener?.onBurstStateChanged(value)
             playingStateListener?.invoke(value)
         }
@@ -129,10 +140,12 @@ class JavaxSoundRenderer(
                     }
 
                     // Pre-buffer for smooth playback without stuttering.
+                    // S2S: 60 ms is enough to absorb jitter; the first audible
+                    // byte must not wait the old 120 ms.
                     val preBufferSize = firstChunk.size
                     val chunks = ArrayDeque<ByteArray>()
                     chunks.add(firstChunk)
-                    val deadline = System.currentTimeMillis() + 120L
+                    val deadline = System.currentTimeMillis() + 60L
                     var buffered = preBufferSize
                     while (buffered < JITTER_PREBUFFER_BYTES && System.currentTimeMillis() < deadline) {
                         val next = audioQueue.poll(40, TimeUnit.MILLISECONDS) ?: break
@@ -200,6 +213,9 @@ class JavaxSoundRenderer(
     private fun writeChunk(line: SourceDataLine, chunk: ByteArray): SourceDataLine? {
         var target = line
         val t0 = System.nanoTime()
+        // Playback meter: RMS of the chunk about to be written (pre-gain —
+        // this renderer applies no gain, so this is the true output energy).
+        _playbackLevel.value = rmsOf(chunk)
         try {
             target.write(chunk, 0, chunk.size)
         } catch (e: Exception) {
@@ -216,6 +232,20 @@ class JavaxSoundRenderer(
         }
         latencyTracker?.record(AudioStage.RENDER, System.nanoTime() - t0)
         return target
+    }
+
+    /** RMS of 16-bit LE mono PCM, normalized 0..1. */
+    private fun rmsOf(chunk: ByteArray): Float {
+        val samples = chunk.size / 2
+        if (samples == 0) return 0f
+        var sum = 0.0
+        var i = 0
+        while (i + 1 < chunk.size) {
+            val sample = ((chunk[i].toInt() and 0xFF) or (chunk[i + 1].toInt() shl 8)).toShort()
+            sum += sample.toDouble() * sample.toDouble()
+            i += 2
+        }
+        return (kotlin.math.sqrt(sum / samples) / 32768.0).toFloat().coerceIn(0f, 1f)
     }
 
     override fun close() {

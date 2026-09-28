@@ -46,6 +46,11 @@ class DesktopRuntime(
     private val _liveVolumeLevel = MutableStateFlow(0f)
     val liveVolumeLevel: StateFlow<Float> = _liveVolumeLevel.asStateFlow()
     /**
+     * Honest playback meter from the audio engine (RMS of last written chunk).
+     * Drives the speaking-state orb. 0f until the engine is initialized.
+     */
+    val playbackLevel: StateFlow<Float> get() = audio.playbackLevel
+    /**
      * Session health for honest UI: updated from session.isLiveReady() on
      * every HealthWatchdog tick. While listening with an unhealthy session
      * the status pill is forced to the reconnecting state.
@@ -167,9 +172,9 @@ class DesktopRuntime(
             onSpeakingStateChanged = { isSpeaking ->
                 controller.updateSpeaking(isSpeaking)
                 if (isSpeaking) {
-                    controller.updateStatus("🔊 ဖြေကြားနေပါတယ်…")
+                    controller.updateStatus("ဖြေကြားနေပါတယ်…")
                 } else if (listening.get()) {
-                    controller.updateStatus("အသင့်ဖြစ်ပါပြီ — 🎤 နားထောင်နေပါသည်")
+                    controller.updateStatus("အသင့်ဖြစ်ပါပြီ — နားထောင်နေပါသည်")
                 } else {
                     controller.updateStatus("အသင့်ဖြစ်ပါပြီ")
                 }
@@ -185,17 +190,17 @@ class DesktopRuntime(
             // automatic-VAD mode (activityStart is not valid there).
             onUserSpeechStart = { bargeIn ->
                 // "Heard you" pill the moment speech starts.
-                controller.updateStatus("🎤 ကြားနေပါတယ်…", AssistantPhase.LISTENING)
+                controller.updateStatus("ကြားနေပါတယ်…", AssistantPhase.LISTENING)
                 if (bargeIn) session.notifyClientBargeIn()
             },
             onUserSpeechEnd = {
                 session.noteUserTurnEnd()
                 // Turn-flush pill: the captured turn is being handed to Live.
-                controller.updateStatus("📤 ပို့နေပါတယ်…", AssistantPhase.THINKING)
+                controller.updateStatus("ပို့နေပါတယ်…", AssistantPhase.THINKING)
             },
             onVadStallWarning = {
                 controller.updateStatus(
-                    "⚠️ mic အသံကြားနေသော်လည်း စကားသံ မတွေ့ပါ — sensitivity ကို စစ်ပါ",
+                    "mic အသံကြားနေသော်လည်း စကားသံ မတွေ့ပါ — sensitivity ကို စစ်ပါ",
                     AssistantPhase.ERROR,
                 )
             },
@@ -231,16 +236,14 @@ class DesktopRuntime(
         val activeWindowContext = commandExecutor.getActiveWindowContext().toPromptContext()
         val activeProfile = profileManager.getActiveProfile()
         val dynamicInstructions = """
-            You are Nilar AI (နီလာ AI), an elite, friendly, warm, polite, and helpful Burmese-speaking Windows computer assistant and tech expert (နည်းပညာကျွမ်းကျင်သူ ကွန်ပျူတာ ပါတနာ) for user profile '$activeProfile'.
-            
-            LANGUAGE, PERSONALITY & SPOKEN CONVERSATION (မြန်မာစကားပြောနှင့် သွက်လက်စွာ ဆွေးနွေးခြင်း):
-            - အသုံးပြုသူ မေးမြန်းသည်များ၊ ခိုင်းစေသည်များကို အမြဲတမ်း သဘာဝကျပြီး သွက်လက်ယဉ်ကျေးသော မြန်မာစကားပြောဖြင့် ရှင်းလင်းပြတ်သားစွာ အသံထွက် ဖြေကြားပေးပါ။
-            - အသုံးပြုသူက ရှင်းလင်းစွာ မမေးဘဲ သို့မဟုတ် မခိုင်းဘဲနှင့် မလိုအပ်သော စကားများ လျှောက်ပြောခြင်း၊ မေးခွန်းများ လျှောက်မေးနေခြင်း လုံးဝ မပြုလုပ်ပါနှင့်။
-            - အသုံးပြုသူနှင့် အပေးအယူ နားလည်မှု အပြည့်ရှိစွာဖြင့် လိုရင်းတိုရှင်း၊ သဘာဝကျကျ၊ တိကျပြတ်သားစွာ ဆောင်ရွက်ပြီး တုံ့ပြန်ပါ။
-            - စကားရှည်ကြီးများ မပြောပါနှင့်။ အသုံးပြုသူ မခိုင်းပါက တိတ်ဆိတ်စွာ စောင့်ဆိုင်းပါ။
-            - "I am an AI assistant" သို့မဟုတ် "<no speech detected>" စသည့် စကားလုံး/tags များကို ဘယ်သောအခါမှ ထုတ်မပြောပါနှင့်။
-            - အသုံးပြုသူ၏ လက်ရှိမေးခွန်း/ပြောဆိုချက်ကို အဓိကထား၍ အကြောင်းအရာနှင့် ကိုက်ညီသော အဖြေကို သဘာဝကျကျ ဖြေကြားပါ။
-            - အသုံးပြုသူ၏ အသံကို မြန်မာဘာသာစကားအဖြစ် ဦးစားပေးနားထောင်ပါ။ မြန်မာစကားဖြစ်နိုင်လျှင် English သို့မဟုတ် Spanish စကားလုံးအဖြစ် မခန့်မှန်းပါနှင့်။ မသေချာပါက command မလုပ်ဘဲ တိုတောင်းစွာ ပြန်မေးပါ။
+            You are Nilar AI (နီလာ AI), a friendly Burmese-speaking voice companion on the user's Windows PC — warm, natural, and fast, like a phone call, never like reading an article. Active user profile: '$activeProfile'.
+            SPOKEN STYLE: Default reply 1–2 short sentences, max ~35 words. Shorter is always better. Never use bullet lists, numbered steps, markdown, code, URLs, file paths, or tool names in speech. If detail is needed, give the single key point aloud, then ask "အသေးစိတ် ဆက်ပြောပေးရမလား။" Never say "I am an AI assistant"/"As an AI..." and never speak tags like <no speech detected>. Never narrate your own actions — just do it.
+            GREETINGS & SMALL TALK: မင်္ဂလာပါ → one warm line back, e.g. "မင်္ဂလာပါ။ ဒီနေ့ ဘာကူညီပေးရမလဲ။" နေကောင်းလား → answer briefly and positively, then offer help in the same breath.
+            INTERRUPTIONS: if interrupted, stop immediately and listen; never finish/restart the old answer; acknowledge briefly ("ဟုတ်ကဲ့၊ နားထောင်နေပါတယ်").
+            CLARITY: vague request → ask ONE short clarifying question; never run a computer command on a guess.
+            TOOL USE: act FIRST (call the tool immediately), then confirm in one short spoken sentence. Never call tools for greetings/small talk/questions.
+            TECHNICAL QUESTIONS: ≤2 short sentences of plain spoken Burmese; offer more detail only if asked.
+            LANGUAGE: default Burmese; if user clearly speaks English reply in natural English. Hear speech as Burmese first; if ambiguous never guess English/Spanish — ask briefly.
             
             ACTIVE FOREGROUND APP CONTEXT (မျက်မှောက် ကွန်ပျူတာ အခြေအနေ):
             $activeWindowContext
@@ -256,7 +259,6 @@ class DesktopRuntime(
               * chain_commands: When user gives multiple sequential actions in one sentence (e.g., "A ဖွင့်ပြီး B စစ်ပေးပါ"), call chain_commands with target = raw sentence or command list.
               * cancel_goal: When user says stop/cancel ongoing goal execution.
             - When user commands an action, execute the appropriate tool IMMEDIATELY and reply concisely with the action outcome in Burmese audio.
-            - When asked technical, programming, Android, or IT questions, give clear, direct, step-by-step explanations in Burmese.
         """.trimIndent()
 
         val selectedModel = apiKeyStore.loadGeminiModel()
@@ -313,7 +315,7 @@ class DesktopRuntime(
                 liveAudioReceivedForTurn = false
                 userSpeechDetectedForTurn = false
                 if (!audio.isSpeaking()) {
-                    controller.updateStatus("အသင့်ဖြစ်ပါပြီ — 🎤 နားထောင်နေပါသည်")
+                    controller.updateStatus("အသင့်ဖြစ်ပါပြီ — နားထောင်နေပါသည်")
                 }
             },
             onSetupComplete = {
@@ -331,11 +333,11 @@ class DesktopRuntime(
                 if (drainFailed > 0) {
                     DesktopLogger.warn("Setup audio drain: $drained sent, $drainFailed failed")
                 }
-                controller.updateStatus("အသင့်ဖြစ်ပါပြီ — 🎤 နားထောင်နေပါသည်")
+                controller.updateStatus("အသင့်ဖြစ်ပါပြီ — နားထောင်နေပါသည်")
             },
             onInterrupted = {
                 audio.stopPlayback()
-                controller.updateStatus("🎤 ဆက်လက် နားထောင်နေပါတယ်…")
+                controller.updateStatus("ဆက်လက် နားထောင်နေပါတယ်…")
             },
             onToolCall = { callId, commandType, target, value ->
                 scope.launch {
@@ -351,7 +353,7 @@ class DesktopRuntime(
                     if (result.requiresConfirmation) {
                         synchronized(pendingPowerCallLock) { pendingPowerCall = PendingPowerCall(callId, DesktopCommand(commandType, target, value)) }
                         controller.updateStatus("အသံဖြင့် အတည်ပြုချက်ကို စောင့်နေပါတယ်")
-                        session.sendText("အရေးကြီးပါတယ်။ ${result.message} အသံနဲ့ အတည်ပြုလိုပါသလား။ အတည်ပြုမယ်ဆိုရင် ဟုတ်ကဲ့ သို့မဟုတ် Confirm လို့ ပြောပါ။ မလုပ်လိုရင် မလုပ်ပါနဲ့ သို့မဟုတ် Cancel လို့ ပြောပါ။")
+                        session.sendText("${result.message}။ လုပ်ဆောင်မှာလား — ဟုတ်ကဲ့ ဒါမှမဟုတ် မလုပ်ပါ လို့ပြောပါ။")
                     } else {
                         controller.recordAction(commandType, result)
                         DesktopLogger.info("Command $commandType success=${result.success}")
@@ -657,7 +659,7 @@ class DesktopRuntime(
         if (!audioSendStallWarned && consecutiveAudioSendFailures >= AUDIO_SEND_STALL_CHUNKS) {
             audioSendStallWarned = true
             DesktopLogger.warn("Audio send stalled: $consecutiveAudioSendFailures consecutive chunks not delivered")
-            controller.updateStatus("⚠️ အသံပို့မရသေးပါ — ပြန်လည်ချိတ်ဆက်နေပါသည်…", AssistantPhase.CONNECTING)
+            controller.updateStatus("အသံပို့မရသေးပါ — ပြန်လည်ချိတ်ဆက်နေပါသည်…", AssistantPhase.CONNECTING)
             scheduleLiveReconnect()
         }
     }
@@ -685,7 +687,7 @@ class DesktopRuntime(
             micLowSinceNanos = 0L
             if (_micSilentWhileListening.value) {
                 _micSilentWhileListening.value = false
-                controller.updateStatus("🎤 နားထောင်နေပါသည် — Live native audio အသင့်ဖြစ်ပါပြီ", AssistantPhase.LISTENING)
+                controller.updateStatus("နားထောင်နေပါသည် — Live native audio အသင့်ဖြစ်ပါပြီ", AssistantPhase.LISTENING)
             }
         }
     }
@@ -708,7 +710,7 @@ class DesktopRuntime(
                         "Liveness probe failed: uplink audio flowing but no server activity for " +
                             "${session.lastServerActivityElapsedMs()}ms — reconnecting",
                     )
-                    controller.updateStatus("🔄 ပြန်လည်ချိတ်ဆက်နေပါသည်…", AssistantPhase.CONNECTING)
+                    controller.updateStatus("ပြန်လည်ချိတ်ဆက်နေပါသည်…", AssistantPhase.CONNECTING)
                     scheduleLiveReconnect()
                 }
             }
@@ -874,18 +876,13 @@ class DesktopRuntime(
                 updateMicSilentState(level)
             },
             onSilenceDetected = {
+                // S2S automatic-VAD mode: the server owns end-of-turn via its
+                // own VAD (silenceDurationMs). The client must NOT send
+                // audioStreamEnd here — that signal means "mic turned off" and
+                // the mic stays open. The client hangover remains for
+                // UI/telemetry only.
                 if (listening.get() && liveConversationMode && session.isLiveReady()) {
-                    scope.launch {
-                        val result = session.flushAudioTurn()
-                        if (result.isFailure) {
-                            val message = result.exceptionOrNull()?.message ?: "unknown error"
-                            DesktopLogger.warn("Live audio turn flush failed: $message")
-                            controller.updateStatus(
-                                "အသံအလှည့် ပို့မရသေးပါ — Live ချိတ်ဆက်မှုကို စစ်နေပါတယ်",
-                                AssistantPhase.CONNECTING,
-                            )
-                        }
-                    }
+                    DesktopLogger.info("Audio telemetry: client VAD hangover elapsed (turn end owned by server VAD)")
                 }
             },
             onSpeechStarted = {
@@ -911,12 +908,12 @@ class DesktopRuntime(
             DesktopLogger.warn("Session lost between toggle and mic start; reconnecting instead of capturing into a dead socket")
             liveConversationMode = false
             stopListening()
-            controller.updateStatus("🔄 ပြန်လည်ချိတ်ဆက်နေပါသည်…", AssistantPhase.CONNECTING)
+            controller.updateStatus("ပြန်လည်ချိတ်ဆက်နေပါသည်…", AssistantPhase.CONNECTING)
             scheduleLiveReconnect()
             return
         }
         soundEffects.playListeningStarted(scope)
-        controller.updateStatus("🎤 နားထောင်နေပါသည် — Live native audio အသင့်ဖြစ်ပါပြီ")
+        controller.updateStatus("နားထောင်နေပါသည် — Live native audio အသင့်ဖြစ်ပါပြီ")
     }
 
     private fun stopListening(userInitiated: Boolean = false) {
@@ -972,11 +969,11 @@ class DesktopRuntime(
             "empty_recycle_bin" -> "Recycle Bin ထဲက အရာအားလုံးကို အပြီးတိုင် ဖျက်ပါမယ်"
             else -> "‘${command.target ?: command.value.orEmpty()}’ app ကို အတင်းပိတ်ပါမယ် (မသိမ်းရသေးသော အလုပ်များ ဆုံးရှုံးနိုင်ပါသည်)"
         }
-        val confirmationText = "$actionText။ ဆက်လုပ်ရန် ဟုတ်ကဲ့ သို့မဟုတ် Confirm လို့ ပြောပါ။ မလုပ်လိုရင် Cancel လို့ ပြောပါ။"
+        val confirmationText = "$actionText။ လုပ်ဆောင်မှာလား — ဟုတ်ကဲ့ ဒါမှမဟုတ် မလုပ်ပါ။"
         controller.updateResponse(confirmationText)
         controller.updateStatus("အသံဖြင့် အတည်ပြုချက်ကို စောင့်နေပါတယ်")
         scope.launch {
-            session.sendText("အရေးကြီးပါတယ်။ $actionText။ အသံနဲ့ အတည်ပြုလိုပါသလား။ အတည်ပြုမယ်ဆိုရင် ဟုတ်ကဲ့ သို့မဟုတ် Confirm လို့ ပြောပါ။ မလုပ်လိုရင် မလုပ်ပါနဲ့ သို့မဟုတ် Cancel လို့ ပြောပါ။")
+            session.sendText("$actionText။ လုပ်ဆောင်မှာလား — ဟုတ်ကဲ့ ဒါမှမဟုတ် မလုပ်ပါ လို့ပြောပါ။")
         }
     }
 
@@ -989,7 +986,7 @@ class DesktopRuntime(
             no.any { normalized.contains(it) } -> cancelPowerAction()
             yes.any { normalized.contains(it) } -> confirmPowerAction()
             else -> {
-                val clarify = "အတည်ပြုချက် မရှင်းလင်းသေးပါ။ လုပ်ဆောင်မယ်ဆိုရင် ဟုတ်ကဲ့ သို့မဟုတ် Confirm၊ မလုပ်လိုရင် Cancel လို့ ပြောပါ။"
+                val clarify = "မရှင်းလင်းပါ။ လုပ်ဆောင်မယ်ဆို ဟုတ်ကဲ့၊ မလုပ်လိုရင် မလုပ်ပါ လို့ပြောပါ။"
                 scope.launch {
                     session.sendText(clarify)
                 }

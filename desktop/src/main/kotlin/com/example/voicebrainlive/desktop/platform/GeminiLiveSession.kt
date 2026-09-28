@@ -29,7 +29,7 @@ class GeminiLiveSession(
     modelName: String = DEFAULT_LIVE_MODEL,
     private val voice: String = "Aoede",
     private val allowDesktopTools: Boolean = false,
-    private val systemInstruction: String = """မင်းက Nilar AI Intelligence Partner (အသိဉာဏ်ရှိတဲ့ နည်းပညာ ပါတနာ) ဖြစ်တယ်။ Gemini လို generic AI assistant မျိုးမဟုတ်ဘဲ အသုံးပြုသူရဲ့ ကွန်ပျူတာရှေ့မှာ အမြဲရှိနေပေးပြီး လိုအပ်တာမှန်သမျှ ကူညီပေးမယ့် ရင်းနှီးတဲ့ အဖော်တစ်ယောက်လို နွေးထွေးဖော်ရွေစွာ ပြောဆိုပါ။
+    private val systemInstruction: String = """မင်းက Nilar AI (နီလာ AI) ဖြစ်တယ်။ Gemini လို generic AI assistant မျိုးမဟုတ်ဘဲ အသုံးပြုသူရဲ့ ကွန်ပျူတာရှေ့မှာ အမြဲရှိနေပေးပြီး လိုအပ်တာမှန်သမျှ ကူညီပေးမယ့် ရင်းနှီးတဲ့ အဖော်တစ်ယောက်လို နွေးထွေးဖော်ရွေစွာ ပြောဆိုပါ။
         |
         |PERSONALITY & FAST SPOKEN CONVERSATION (စရိုက်နှင့် အပြန်အလှန် လျင်မြန်စွာ ပြောဆိုဆွေးနွေးခြင်း):
         |- အမြဲတမ်း ဖော်ရွေနွေးထွေးပြီး အားပေးတတ်သူဖြစ်ပါစေ။
@@ -313,24 +313,35 @@ class GeminiLiveSession(
             put("setup", JSONObject().apply {
                 put("model", model)
                 put("generationConfig", JSONObject().apply {
-                    put("responseModalities", JSONArray().apply { put("AUDIO") })
+                    put("responseModalities", JSONArray().apply { put("AUDIO"); put("TEXT") })
+                    // Keep spoken replies short: ~300 tokens caps a turn at
+                    // roughly 1–2 minutes of fast speech, well beyond the
+                    // 1–2 sentence conversational target in the instructions.
+                    put("maxOutputTokens", 300)
                     put("speechConfig", JSONObject().apply {
                         put("voiceConfig", JSONObject().apply {
                             put("prebuiltVoiceConfig", JSONObject().apply {
                                 put("voiceName", voice)
                             })
-                        })
+                        })})
                     })
-                })
+
                 put("realtimeInputConfig", JSONObject().apply {
                     put("automaticActivityDetection", JSONObject().apply {
                         put("disabled", false)
-                        put("startOfSpeechSensitivity", "START_SENSITIVITY_LOW")
-                        put("endOfSpeechSensitivity", "END_SENSITIVITY_LOW")
+                        // S2S speed: HIGH sensitivity on both ends of speech so
+                        // turn-taking reacts in ~400 ms instead of ~700 ms.
+                        put("startOfSpeechSensitivity", "START_SENSITIVITY_HIGH")
+                        put("endOfSpeechSensitivity", "END_SENSITIVITY_HIGH")
                         put("prefixPaddingMs", 80)
-                        put("silenceDurationMs", 700)
+                        put("silenceDurationMs", 400)
                     })
                 })
+                // Enable server-side session resumption: the server returns
+                // resumption handles in sessionResumptionUpdate messages, so a
+                // dropped socket can resume the same Live session instead of
+                // paying a full setup round-trip on reconnect.
+                put("sessionResumption", JSONObject())
                 put("inputAudioTranscription", JSONObject())
                 put("outputAudioTranscription", JSONObject())
                 put("systemInstruction", JSONObject().apply {
@@ -575,6 +586,7 @@ class GeminiLiveSession(
                     })
                 })
                 put("contents", JSONArray(restChatHistory.map { JSONObject(it.toString()) }))
+                put("generationConfig", JSONObject().apply { put("maxOutputTokens", 300) })
                 if (allowDesktopTools) put("tools", desktopTools())
             }
 
@@ -667,6 +679,7 @@ class GeminiLiveSession(
                         put("parts", JSONArray().apply { put(JSONObject().apply { put("text", systemInstruction) }) })
                     })
                     put("contents", JSONArray(restChatHistory.map { JSONObject(it.toString()) }))
+                    put("generationConfig", JSONObject().apply { put("maxOutputTokens", 300) })
                     if (allowDesktopTools) put("tools", desktopTools())
                 }
 
@@ -710,7 +723,7 @@ class GeminiLiveSession(
                 })
             }
             val textPrompt = JSONObject().apply {
-                put("text", "ကျေးဇူးပြု၍ ဤအသံကို နားထောင်ပြီး အသုံးပြုသူ ခိုင်းစေသော/မေးမြန်းသော အရာကို မြန်မာစကားပြော ကွန်ပျူတာ လက်ထောက် အနေဖြင့် တုံ့ပြန်/လုပ်ဆောင်ပေးပါ။")
+                put("text", "ကျေးဇူးပြု၍ ဤအသံကို နားထောင်ပြီး အသုံးပြုသူ ခိုင်းစေသော/မေးမြန်းသော အရာကို မြန်မာစကားပြော ကွန်ပျူတာ လက်ထောက် အနေဖြင့် တုံ့ပြန်/လုပ်ဆောင်ပေးပါ။ တိုတိုနှင့် ၁–၂ ကြောင်းသာ ဖြေပါ။")
             }
 
             val requestBodyJson = JSONObject().apply {
@@ -728,6 +741,7 @@ class GeminiLiveSession(
                         })
                     })
                 })
+                put("generationConfig", JSONObject().apply { put("maxOutputTokens", 300) })
                 if (allowDesktopTools) put("tools", desktopTools())
             }
 
@@ -769,6 +783,7 @@ class GeminiLiveSession(
                                     put("systemInstruction", JSONObject().apply {
                                         put("parts", JSONArray().apply { put(JSONObject().apply { put("text", systemInstruction) }) })
                                     })
+                                    put("generationConfig", JSONObject().apply { put("maxOutputTokens", 300) })
                                     put("contents", JSONArray().apply {
                                         put(JSONObject().apply {
                                             put("role", "user")
@@ -928,6 +943,7 @@ class GeminiLiveSession(
                     })
                 })
                 put("contents", JSONArray().apply { put(contentJson) })
+                put("generationConfig", JSONObject().apply { put("maxOutputTokens", 300) })
             }
 
             val (code, responseBody) = executeGenerateContent(requestBodyJson)

@@ -1,12 +1,19 @@
 package com.example.voicebrainlive.desktop
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Canvas
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.with
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -21,11 +28,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material3.Button
@@ -54,11 +59,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isShiftPressed
@@ -80,10 +82,14 @@ import com.example.voicebrainlive.desktop.core.GoalDefinition
 import com.example.voicebrainlive.desktop.core.GoalStatus
 import com.example.voicebrainlive.desktop.core.StepStatus
 import kotlinx.coroutines.launch
-import java.awt.Toolkit
-import java.awt.datatransfer.StringSelection
 import com.example.voicebrainlive.desktop.platform.DesktopLogger
+import com.example.voicebrainlive.desktop.ui.AssistantOrb
+import com.example.voicebrainlive.desktop.ui.AuroraBackground
+import com.example.voicebrainlive.desktop.ui.ConversationList
 import com.example.voicebrainlive.desktop.ui.NeuralBrainScreen
+import com.example.voicebrainlive.desktop.ui.NilarColors
+import com.example.voicebrainlive.desktop.ui.NilarRadii
+import com.example.voicebrainlive.desktop.ui.NilarType
 
 // Modern Glassmorphic Dark Theme Palette
 private val DarkBg = Color(0xFF070B14)
@@ -230,7 +236,6 @@ private fun VoiceBrainDesktopApp(
     var desktopAutomationEnabled by remember { mutableStateOf(runtime.desktopAutomationEnabled()) }
     var showApiKey by remember { mutableStateOf(false) }
     var showNeuralBrain by remember { mutableStateOf(false) }
-    var selectedCommandIndex by remember { mutableStateOf(0) }
     val state by runtime.assistant.state.collectAsState()
     val voiceTyping by runtime.voiceTypingMode.collectAsState()
     val sessionHealthy by runtime.sessionHealthy.collectAsState()
@@ -241,7 +246,6 @@ private fun VoiceBrainDesktopApp(
     val commandRequest by commandModeRequest.collectAsState()
     val neuralBrainRequest by runtime.showNeuralBrainRequest.collectAsState()
     val commandFocusRequester = remember { FocusRequester() }
-    val chatScroll = rememberScrollState()
     LaunchedEffect(commandRequest) {
         if (commandRequest > 0L) commandFocusRequester.requestFocus()
     }
@@ -251,7 +255,6 @@ private fun VoiceBrainDesktopApp(
             showSettings = false
         }
     }
-    val quickActionsScroll = rememberScrollState()
 
     fun send(text: String) {
         if (text.isBlank()) return
@@ -274,6 +277,13 @@ private fun VoiceBrainDesktopApp(
         "🌐 Google Chrome" to "Chrome ဖွင့်ပါ",
     )
 
+    val devChips = listOf(
+        "⚡ Auto-Fix" to "VoiceBrainLive ပရောဂျက်မှာ bug ရှာပြင်ပေးပါ",
+        "🔄 Auto-Heal" to "VoiceBrainLive project ကို self heal လုပ်ပြီး compile စမ်းပေးပါ",
+        "📱 Emulator" to "VoiceBrainLive app ကို emulator ပေါ်တင်ပြီး crash စစ်ပေးပါ",
+        "🌿 Git Commit" to "VoiceBrainLive ပြင်ဆင်ထားတာတွေကို git commit ထိုးပေးပါ",
+    )
+
     MaterialTheme(
         colorScheme = darkColorScheme(
             primary = AccentMint,
@@ -288,15 +298,24 @@ private fun VoiceBrainDesktopApp(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(
-                    Brush.radialGradient(
-                        colors = listOf(Color(0xFF111C38), Color(0xFF0A1022), Color(0xFF050811)),
-                        center = Offset(300f, 150f),
-                        radius = 1200f
-                    )
-                )
+                .background(NilarColors.abyssGradient)
         ) {
-            if (showSettings) {
+            AuroraBackground(phase = state.phase)
+            val screenKey = when {
+                showSettings -> 2
+                showNeuralBrain -> 1
+                else -> 0
+            }
+            AnimatedContent(
+                targetState = screenKey,
+                transitionSpec = {
+                    (slideInHorizontally(animationSpec = tween(350)) { it / 4 } + fadeIn(animationSpec = tween(350))) with
+                        (slideOutHorizontally(animationSpec = tween(350)) { -it / 4 } + fadeOut(animationSpec = tween(350)))
+                },
+                label = "screen-slide",
+            ) { key ->
+                when (key) {
+                    2 ->
                 SettingsPanel(
                     apiKey = apiKey,
                     showApiKey = showApiKey,
@@ -343,18 +362,30 @@ private fun VoiceBrainDesktopApp(
                     },
                     onExitApp = onExitApp,
                 )
-            } else if (showNeuralBrain) {
-                NeuralBrainScreen(
-                    runtime = runtime,
-                    onClose = { showNeuralBrain = false }
-                )
-            } else {
+                1 ->
+                        NeuralBrainScreen(
+                            runtime = runtime,
+                            onClose = { showNeuralBrain = false }
+                        )
+                    else ->
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(horizontal = 22.dp, vertical = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
+                    // Honest status: while listening against a dead session, force
+                    // the reconnecting pill instead of a stale "listening" state.
+                    val pillStatus = if (state.isListening && !sessionHealthy) {
+                        "ပြန်လည်ချိတ်ဆက်နေပါသည်…"
+                    } else {
+                        state.status
+                    }
+                    val pillPhase = if (state.isListening && !sessionHealthy) {
+                        AssistantPhase.CONNECTING
+                    } else {
+                        state.phase
+                    }
                     // Header Bar with Glowing Accents
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -362,19 +393,16 @@ private fun VoiceBrainDesktopApp(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Surface(
-                                color = CardSoft,
-                                shape = RoundedCornerShape(10.dp),
-                                border = androidx.compose.foundation.BorderStroke(
-                                    1.dp,
-                                    Brush.linearGradient(listOf(AccentMint.copy(alpha = 0.6f), AccentCyan.copy(alpha = 0.2f)))
-                                ),
-                                modifier = Modifier.size(38.dp),
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Text("💎", fontSize = 18.sp)
-                                }
-                            }
+                            // 40dp mini orb: the same living glyph as the main
+                            // voice orb, kept still in the header.
+                            AssistantOrb(
+                                phase = state.phase,
+                                micLevel = 0f,
+                                playbackLevel = 0f,
+                                micSilent = false,
+                                onClick = {},
+                                size = 40.dp,
+                            )
                             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                     Text("Nilar AI", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = TextMain)
@@ -416,19 +444,6 @@ private fun VoiceBrainDesktopApp(
                             }
 
 
-                            // Honest status: while listening against a dead session,
-                            // force the reconnecting pill instead of a stale
-                            // "listening" state.
-                            val pillStatus = if (state.isListening && !sessionHealthy) {
-                                "🔄 ပြန်လည်ချိတ်ဆက်နေပါသည်…"
-                            } else {
-                                state.status
-                            }
-                            val pillPhase = if (state.isListening && !sessionHealthy) {
-                                AssistantPhase.CONNECTING
-                            } else {
-                                state.phase
-                            }
                             StatusPill(pillStatus, state.isConnected, state.isListening, pillPhase)
 
                             Surface(
@@ -480,20 +495,44 @@ private fun VoiceBrainDesktopApp(
                                 verticalArrangement = Arrangement.SpaceEvenly,
                             ) {
                                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    Text("VOICE COMPANION", color = AccentCyan, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+                                    Text("VOICE COMPANION", style = NilarType.Eyebrow)
                                     Text(
                                         if (state.isListening) "အသံကို နားထောင်နေပါသည်" else "ပြောရန် အဆင်သင့်ဖြစ်ပါပြီ",
-                                        color = TextMain,
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.SemiBold
+                                        style = NilarType.Status.copy(fontSize = 13.sp),
                                     )
                                 }
 
-                                AudioWaveformVisualizer(
-                                    level = liveLevel,
-                                    isActive = state.isListening || state.phase == AssistantPhase.SPEAKING,
-                                    micSilent = micSilent,
+                                val playbackLevel by runtime.playbackLevel.collectAsState()
+                                val orbSize by animateDpAsState(
+                                    targetValue = if (state.isListening || state.phase == AssistantPhase.SPEAKING) 216.dp else 200.dp,
+                                    animationSpec = tween(600),
+                                    label = "orb-size",
                                 )
+                                // The orb IS the mic button: tap it to toggle listening.
+                                AssistantOrb(
+                                    phase = state.phase,
+                                    micLevel = liveLevel,
+                                    playbackLevel = playbackLevel,
+                                    micSilent = micSilent,
+                                    onClick = runtime::toggleListening,
+                                    size = orbSize,
+                                )
+                                // Orb-integrated status line: AnimatedContent over the live
+                                // status text so transitions read smoothly.
+                                AnimatedContent(
+                                    targetState = pillStatus,
+                                    transitionSpec = { fadeIn(tween(250)) with fadeOut(tween(250)) },
+                                    label = "orb-status",
+                                ) { statusText ->
+                                    Text(
+                                        text = statusText,
+                                        style = NilarType.Status.copy(
+                                            color = NilarColors.phaseColor(pillPhase, state.isConnected),
+                                        ),
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
                                 if (micSilent) {
                                     Text(
                                         "mic က ဘာမှမကြားရပါ — input device ကို စစ်ပါ",
@@ -502,8 +541,6 @@ private fun VoiceBrainDesktopApp(
                                         fontWeight = FontWeight.SemiBold,
                                     )
                                 }
-
-                                MicrophoneButton(isActive = state.isListening, onClick = runtime::toggleListening)
 
                                 Button(
                                     onClick = { runtime.toggleVoiceTypingMode() },
@@ -567,146 +604,76 @@ private fun VoiceBrainDesktopApp(
                                     )
                                     Spacer(modifier = Modifier.height(10.dp))
                                 }
-                                SelectionContainer(
+                                ConversationList(
+                                    messages = state.messages,
+                                    phase = state.phase,
                                     modifier = Modifier
                                         .weight(1f)
-                                        .fillMaxWidth()
-                                ) {
-                                    Column(
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .verticalScroll(chatScroll),
-                                        verticalArrangement = Arrangement.spacedBy(10.dp),
-                                    ) {
-                                        state.messages.forEach { msg ->
-                                            ChatMessageBubble(msg)
-                                        }
-                                    }
-                                }
+                                        .fillMaxWidth(),
+                                )
                             }
                         }
                     }
 
-                    // Autonomous Coding Quick Action Hub
-                    Row(
-                        modifier = Modifier.fillMaxWidth().horizontalScroll(quickActionsScroll),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Surface(
-                            color = CardSoft,
-                            shape = RoundedCornerShape(8.dp),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, AccentMint.copy(alpha = 0.45f)),
-                            modifier = Modifier.clickable { send("VoiceBrainLive ပရောဂျက်မှာ bug ရှာပြင်ပေးပါ") }
-                        ) {
-                            Row(modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                                Text("⚡ Auto-Fix", color = AccentMint, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                            }
-                        }
-
-                        Surface(
-                            color = CardSoft,
-                            shape = RoundedCornerShape(8.dp),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, AccentCyan.copy(alpha = 0.45f)),
-                            modifier = Modifier.clickable { send("VoiceBrainLive project ကို self heal လုပ်ပြီး compile စမ်းပေးပါ") }
-                        ) {
-                            Row(modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                                Text("🔄 Auto-Heal", color = AccentCyan, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                            }
-                        }
-
-                        Surface(
-                            color = CardSoft,
-                            shape = RoundedCornerShape(8.dp),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, AccentGold.copy(alpha = 0.45f)),
-                            modifier = Modifier.clickable { send("VoiceBrainLive app ကို emulator ပေါ်တင်ပြီး crash စစ်ပေးပါ") }
-                        ) {
-                            Row(modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                                Text("📱 Emulator", color = AccentGold, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                            }
-                        }
-
-                        Surface(
-                            color = CardSoft,
-                            shape = RoundedCornerShape(8.dp),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, AccentPurple.copy(alpha = 0.45f)),
-                            modifier = Modifier.clickable { send("VoiceBrainLive ပြင်ဆင်ထားတာတွေကို git commit ထိုးပေးပါ") }
-                        ) {
-                            Row(modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                                Text("🌿 Git Commit", color = AccentPurple, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                            }
-                        }
-
-                    }
-
-                    // Quick Command Carousel
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
+                    // Quick-action chip rail (single, collapsible).
+                    var chipsExpanded by remember { mutableStateOf(true) }
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
+                            Text("QUICK ACTIONS", style = NilarType.Eyebrow)
                             Surface(
                                 color = CardSoft,
                                 shape = RoundedCornerShape(6.dp),
                                 border = androidx.compose.foundation.BorderStroke(1.dp, BorderGlow),
-                                modifier = Modifier
-                                    .size(28.dp)
-                                    .clickable {
-                                        selectedCommandIndex = (selectedCommandIndex - 1 + quickActions.size) % quickActions.size
-                                    }
+                                modifier = Modifier.clickable { chipsExpanded = !chipsExpanded },
                             ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Text("◀", color = TextSub, fontSize = 11.sp)
-                                }
+                                Text(
+                                    if (chipsExpanded) "\u25B4 Hide" else "\u25BE Show",
+                                    color = TextSub,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                )
                             }
-
-                            val currentCmd = quickActions[selectedCommandIndex]
-                            Surface(
-                                color = CardSoft,
-                                shape = RoundedCornerShape(6.dp),
-                                border = androidx.compose.foundation.BorderStroke(1.dp, AccentCyan.copy(alpha = 0.35f)),
-                                modifier = Modifier.clickable { send(currentCmd.second) }
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    Text(currentCmd.first, color = TextMain, fontSize = 11.sp, fontWeight = FontWeight.Medium)
-                                    Text("↵ Run", color = AccentMint, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                                }
-                            }
-
-                            Surface(
-                                color = CardSoft,
-                                shape = RoundedCornerShape(6.dp),
-                                border = androidx.compose.foundation.BorderStroke(1.dp, BorderGlow),
+                        }
+                        AnimatedVisibility(visible = chipsExpanded) {
+                            Row(
                                 modifier = Modifier
-                                    .size(28.dp)
-                                    .clickable {
-                                        selectedCommandIndex = (selectedCommandIndex + 1) % quickActions.size
-                                    }
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Text("▶", color = TextSub, fontSize = 11.sp)
+                                (devChips + quickActions).forEach { (label, prompt) ->
+                                    Surface(
+                                        color = CardSoft,
+                                        shape = RoundedCornerShape(8.dp),
+                                        border = androidx.compose.foundation.BorderStroke(1.dp, BorderGlow),
+                                        modifier = Modifier.clickable { send(prompt) },
+                                    ) {
+                                        Text(
+                                            label,
+                                            color = TextMain,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                        )
+                                    }
                                 }
                             }
                         }
-
-                        Text(
-                            "${selectedCommandIndex + 1} / ${quickActions.size}",
-                            color = TextSub,
-                            fontSize = 11.sp
-                        )
                     }
 
-                    // Text Input Bar with Glowing Mint Border
+                    // Text Input Bar — glass container, circular mint send button.
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(NilarRadii.Lg))
+                            .background(NilarColors.Glass, RoundedCornerShape(NilarRadii.Lg))
+                            .border(1.dp, NilarColors.BorderGlow.copy(alpha = 0.6f), RoundedCornerShape(NilarRadii.Lg))
+                            .padding(8.dp),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -732,10 +699,10 @@ private fun VoiceBrainDesktopApp(
                             singleLine = true,
                             shape = RoundedCornerShape(12.dp),
                             colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = AccentMint,
-                                unfocusedBorderColor = BorderGlow,
-                                focusedContainerColor = CardSoft,
-                                unfocusedContainerColor = CardSoft,
+                                focusedBorderColor = Color.Transparent,
+                                unfocusedBorderColor = Color.Transparent,
+                                focusedContainerColor = Color.Transparent,
+                                unfocusedContainerColor = Color.Transparent,
                                 focusedTextColor = TextMain,
                                 unfocusedTextColor = TextMain,
                             ),
@@ -755,264 +722,15 @@ private fun VoiceBrainDesktopApp(
                                 disabledContainerColor = CardSoft,
                                 disabledContentColor = TextSub,
                             ),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.size(52.dp),
+                            shape = CircleShape,
+                            modifier = Modifier.size(44.dp),
                             contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)
                         ) {
                             Text("➤", fontSize = 18.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ChatMessageBubble(message: com.example.voicebrainlive.desktop.core.ChatMessage) {
-    val isUser = message.sender == com.example.voicebrainlive.desktop.core.MessageSender.USER
-    val isSystem = message.sender == com.example.voicebrainlive.desktop.core.MessageSender.SYSTEM
-    var copied by remember { mutableStateOf(false) }
-
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = when {
-            isUser -> Arrangement.End
-            isSystem -> Arrangement.Center
-            else -> Arrangement.Start
-        },
-    ) {
-        Surface(
-            color = Color.Transparent,
-            shape = RoundedCornerShape(14.dp),
-            border = androidx.compose.foundation.BorderStroke(
-                1.dp,
-                when {
-                    isUser -> androidx.compose.ui.graphics.SolidColor(AccentCyan.copy(alpha = 0.45f))
-                    isSystem -> androidx.compose.ui.graphics.SolidColor(AccentGold.copy(alpha = 0.45f))
-                    else -> Brush.linearGradient(listOf(AccentMint.copy(alpha = 0.5f), AccentCyan.copy(alpha = 0.3f)))
                 }
-            ),
-            modifier = Modifier.widthIn(max = 640.dp),
-        ) {
-            Box(
-                modifier = Modifier
-                    .background(
-                        when {
-                            isUser -> Brush.linearGradient(listOf(Color(0xFF1E293B), Color(0xFF0F172A)))
-                            isSystem -> Brush.linearGradient(listOf(Color(0xFF241D10), Color(0xFF141008)))
-                            else -> Brush.linearGradient(listOf(Color(0xFF132338), Color(0xFF0B1726)))
-                        }
-                    )
-                    .padding(horizontal = 14.dp, vertical = 10.dp)
-            ) {
-                Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Surface(
-                                color = when {
-                                    isUser -> AccentCyan.copy(alpha = 0.2f)
-                                    isSystem -> AccentGold.copy(alpha = 0.2f)
-                                    else -> AccentMint.copy(alpha = 0.2f)
-                                },
-                                shape = RoundedCornerShape(4.dp)
-                            ) {
-                                Text(
-                                    text = when {
-                                        isUser -> "YOU"
-                                        isSystem -> "SYSTEM"
-                                        else -> "VOICEBRAIN"
-                                    },
-                                    color = when {
-                                        isUser -> AccentCyan
-                                        isSystem -> AccentGold
-                                        else -> AccentMint
-                                    },
-                                    fontSize = 9.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
-                                )
-                            }
-                            Text(
-                                text = java.text.SimpleDateFormat("HH:mm").format(java.util.Date(message.timestamp)),
-                                color = TextSub,
-                                fontSize = 9.sp,
-                            )
-                        }
-
-                        // Copy Button with Copied feedback
-                        Surface(
-                            color = CardSoft.copy(alpha = 0.6f),
-                            shape = RoundedCornerShape(6.dp),
-                            modifier = Modifier.clickable {
-                                Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(message.text), null)
-                                copied = true
-                            }
-                        ) {
-                            Text(
-                                text = if (copied) "✓ Copied" else "📋 Copy",
-                                fontSize = 10.sp,
-                                color = if (copied) AccentMint else TextSub,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
-                            )
-                        }
-                    }
-
-                    Text(
-                        text = message.text,
-                        color = TextMain,
-                        fontSize = 13.5.sp,
-                        lineHeight = 20.sp,
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun AudioWaveformVisualizer(
-    level: Float,
-    isActive: Boolean,
-    micSilent: Boolean = false,
-    modifier: Modifier = Modifier,
-) {
-    Row(
-        modifier = modifier.height(34.dp),
-        horizontalArrangement = Arrangement.spacedBy(5.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        val barCount = 9
-        repeat(barCount) {
-            // Honest bars: real mic level only — no sine-wave ambience. When
-            // the mic hears nothing the bars stay flat instead of dancing.
-            val heightFactor = when {
-                !isActive || micSilent -> 0.10f
-                else -> (0.12f + level * 0.88f).coerceIn(0.12f, 1f)
-            }
-            val brush = if (isActive && !micSilent) {
-                Brush.verticalGradient(listOf(AccentMint, AccentCyan))
-            } else {
-                Brush.verticalGradient(listOf(Color(0xFF334155), Color(0xFF1E293B)))
-            }
-
-            Box(
-                modifier = Modifier
-                    .width(5.dp)
-                    .height((34 * heightFactor).dp)
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(brush),
-            )
-        }
-    }
-}
-
-@Composable
-private fun MicrophoneButton(isActive: Boolean, onClick: () -> Unit) {
-    val transition = rememberInfiniteTransition(label = "mic-pulse")
-    val pulse by transition.animateFloat(
-        initialValue = 0.95f,
-        targetValue = if (isActive) 1.08f else 1.0f,
-        animationSpec = infiniteRepeatable(tween(850), RepeatMode.Reverse),
-        label = "mic-pulse-scale",
-    )
-    val auraAlpha by transition.animateFloat(
-        initialValue = 0.15f,
-        targetValue = if (isActive) 0.55f else 0.15f,
-        animationSpec = infiniteRepeatable(tween(850), RepeatMode.Reverse),
-        label = "mic-aura-alpha",
-    )
-    val outerPulse by transition.animateFloat(
-        initialValue = 1.0f,
-        targetValue = if (isActive) 1.22f else 1.0f,
-        animationSpec = infiniteRepeatable(tween(1200), RepeatMode.Restart),
-        label = "mic-outer-pulse",
-    )
-
-    Box(contentAlignment = Alignment.Center, modifier = Modifier.size(136.dp)) {
-        Canvas(modifier = Modifier.size(136.dp)) {
-            val ringColor = if (isActive) AccentMint else AccentCyan
-            if (isActive) {
-                drawCircle(
-                    color = ringColor.copy(alpha = (1f - (outerPulse - 1f) / 0.22f).coerceIn(0f, 0.35f)),
-                    radius = size.minDimension * 0.45f * outerPulse,
-                    style = Stroke(width = 1.5.dp.toPx()),
-                )
-            }
-            drawCircle(
-                color = ringColor.copy(alpha = auraAlpha * 0.25f),
-                radius = size.minDimension * 0.44f * pulse,
-            )
-            drawCircle(
-                color = ringColor.copy(alpha = auraAlpha * 0.7f),
-                radius = size.minDimension * 0.44f,
-                style = Stroke(width = 1.5.dp.toPx()),
-            )
-        }
-
-        Box(
-            modifier = Modifier
-                .size(98.dp)
-                .clip(CircleShape)
-                .background(
-                    if (isActive) {
-                        Brush.radialGradient(listOf(Color(0xFF0F3930), Color(0xFF081C17)))
-                    } else {
-                        Brush.radialGradient(listOf(Color(0xFF1B283E), Color(0xFF10192A)))
-                    },
-                    CircleShape,
-                )
-                .border(
-                    2.dp,
-                    if (isActive) {
-                        Brush.linearGradient(listOf(AccentMint, AccentCyan))
-                    } else {
-                        Brush.linearGradient(listOf(BorderGlow, BorderColor))
-                    },
-                    CircleShape
-                )
-                .clickable(onClick = onClick),
-            contentAlignment = Alignment.Center,
-        ) {
-            Canvas(modifier = Modifier.size(48.dp)) {
-                val center = Offset(size.width / 2f, size.height / 2f)
-                val micWidth = size.width * 0.28f
-                val micHeight = size.height * 0.48f
-                val color = if (isActive) AccentMint else AccentCyan
-
-                drawRoundRect(
-                    color = color,
-                    topLeft = Offset(center.x - micWidth / 2, center.y - micHeight / 2),
-                    size = androidx.compose.ui.geometry.Size(micWidth, micHeight),
-                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(micWidth / 2, micWidth / 2),
-                )
-                drawArc(
-                    color = color,
-                    startAngle = 25f,
-                    sweepAngle = 130f,
-                    useCenter = false,
-                    topLeft = Offset(center.x - size.width * 0.32f, center.y - size.height * 0.14f),
-                    size = androidx.compose.ui.geometry.Size(size.width * 0.64f, size.height * 0.56f),
-                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round),
-                )
-                drawLine(
-                    color = color,
-                    start = Offset(center.x, center.y + size.height * 0.42f),
-                    end = Offset(center.x, center.y + size.height * 0.27f),
-                    strokeWidth = 3.dp.toPx(),
-                    cap = StrokeCap.Round,
-                )
-                drawLine(
-                    color = color,
-                    start = Offset(center.x - size.width * 0.18f, center.y + size.height * 0.45f),
-                    end = Offset(center.x + size.width * 0.18f, center.y + size.height * 0.45f),
-                    strokeWidth = 3.dp.toPx(),
-                    cap = StrokeCap.Round,
-                )
             }
         }
     }
@@ -1020,18 +738,13 @@ private fun MicrophoneButton(isActive: Boolean, onClick: () -> Unit) {
 
 @Composable
 private fun StatusPill(status: String, connected: Boolean, listening: Boolean, phase: AssistantPhase) {
-    val color = when (phase) {
-        AssistantPhase.LISTENING -> AccentMint
-        AssistantPhase.SPEAKING -> AccentGold
-        AssistantPhase.THINKING -> Color(0xFFA78BFA)
-        AssistantPhase.CONNECTING -> AccentCyan
-        AssistantPhase.CONFIRMING -> Color(0xFFFF9F68)
-        AssistantPhase.ERROR -> Color(0xFFFF6B6B)
-        AssistantPhase.READY -> if (connected) AccentCyan else Color(0xFF475569)
-    }
+    // Slim status pill: 8dp radius, no emoji, phase color from the single
+    // shared source with a 600ms transition. The dead-session override is
+    // applied by the caller (pillPhase = CONNECTING while listening on a
+    // dead session).
     val animatedColor by animateColorAsState(
-        targetValue = color,
-        animationSpec = tween(450),
+        targetValue = NilarColors.phaseColor(phase, connected),
+        animationSpec = tween(600),
         label = "status-color",
     )
     val transition = rememberInfiniteTransition(label = "status-dot-pulse")
@@ -1046,8 +759,8 @@ private fun StatusPill(status: String, connected: Boolean, listening: Boolean, p
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         modifier = Modifier
-            .background(animatedColor.copy(alpha = 0.14f), RoundedCornerShape(10.dp))
-            .border(1.dp, animatedColor.copy(alpha = 0.45f), RoundedCornerShape(10.dp))
+            .background(animatedColor.copy(alpha = 0.14f), RoundedCornerShape(NilarRadii.Sm))
+            .border(1.dp, animatedColor.copy(alpha = 0.45f), RoundedCornerShape(NilarRadii.Sm))
             .padding(horizontal = 10.dp, vertical = 6.dp)
     ) {
         Box(
@@ -1056,7 +769,7 @@ private fun StatusPill(status: String, connected: Boolean, listening: Boolean, p
                 .clip(CircleShape)
                 .background(animatedColor)
         )
-        Text(status, color = TextMain, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(status, style = NilarType.Status, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 

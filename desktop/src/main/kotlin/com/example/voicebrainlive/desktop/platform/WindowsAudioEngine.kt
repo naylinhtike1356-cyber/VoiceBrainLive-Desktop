@@ -16,8 +16,9 @@ import com.example.voicebrainlive.desktop.platform.audio.WebRtcAec3EchoCanceller
 import java.util.Base64
 import java.util.concurrent.ConcurrentLinkedDeque
 import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.flow.StateFlow
 
-private const val ECHO_COOLDOWN_MS = 400L // Grace period for room acoustic reverb to dissipate
+private const val ECHO_COOLDOWN_MS = 200L // S2S: shorter reverb guard so the mic reopens faster after speech
 private const val PRE_ROLL_CHUNKS = 8 // Keep last ~256ms in memory so initial syllable is preserved
 private const val RENDER_REF_KEEP_BYTES = 12_000 // ~250ms of 24kHz render audio kept as AEC reference
 private const val RENDER_REF_FRAME_BYTES_24K = 1_536 // 32ms @ 24kHz — resamples to a 1024-byte 16kHz frame
@@ -99,6 +100,9 @@ class WindowsAudioEngine(
 
     private val renderer: AudioRenderer =
         (rendererFactory ?: { tracker -> JavaxSoundRenderer(onAudioError, tracker) })(latencyTracker)
+
+    /** Honest playback meter from the renderer: RMS of the last written chunk. */
+    val playbackLevel: StateFlow<Float> get() = renderer.playbackLevel
     private val capture: AudioCapture =
         (captureFactory ?: { tracker ->
             JavaxSoundCapture(onError = onAudioError, latencyTracker = tracker, mixerName = selectedMixerName)
