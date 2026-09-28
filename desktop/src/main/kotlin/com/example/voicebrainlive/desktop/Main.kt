@@ -80,67 +80,10 @@ import com.example.voicebrainlive.desktop.core.GoalDefinition
 import com.example.voicebrainlive.desktop.core.GoalStatus
 import com.example.voicebrainlive.desktop.core.StepStatus
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.delay
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
-import java.nio.channels.FileChannel
-import java.nio.channels.FileLock
-import java.nio.file.Files
-import java.nio.file.Path
-import java.nio.file.StandardOpenOption
 import com.example.voicebrainlive.desktop.platform.DesktopLogger
 import com.example.voicebrainlive.desktop.ui.NeuralBrainScreen
-
-private class SingleInstanceGuard private constructor(
-    private val channel: FileChannel,
-    private val lock: FileLock,
-    private val lockFile: Path,
-) : AutoCloseable {
-    override fun close() {
-        runCatching { lock.release() }
-        runCatching { channel.close() }
-        runCatching { Files.deleteIfExists(lockFile) }
-    }
-
-    companion object {
-        fun acquire(): SingleInstanceGuard? = runCatching {
-            val dir = Path.of(System.getenv("APPDATA"), "VoiceBrainLive")
-            Files.createDirectories(dir)
-            val lockFile = dir.resolve("instance.lock")
-            val channel = FileChannel.open(
-                lockFile,
-                StandardOpenOption.CREATE,
-                StandardOpenOption.WRITE,
-                StandardOpenOption.READ,
-            )
-            val lock = channel.tryLock() ?: run {
-                DesktopLogger.info("SingleInstanceGuard: another instance is running; signaling to show window and exiting secondary process.")
-                channel.close()
-                signalRunningInstance(dir)
-                return null
-            }
-            DesktopLogger.info("SingleInstanceGuard: acquired lock successfully.")
-            runCatching { Files.deleteIfExists(dir.resolve("show_window.trigger")) }
-            SingleInstanceGuard(channel, lock, lockFile)
-        }.getOrNull()
-
-        private fun signalRunningInstance(dir: Path) {
-            runCatching {
-                val trigger = dir.resolve("show_window.trigger")
-                Files.writeString(
-                    trigger,
-                    System.currentTimeMillis().toString(),
-                    StandardOpenOption.CREATE,
-                    StandardOpenOption.TRUNCATE_EXISTING,
-                    StandardOpenOption.WRITE,
-                )
-            }
-            runCatching {
-                ProcessBuilder("powershell.exe", "-NoProfile", "-Command", "(New-Object -ComObject WScript.Shell).AppActivate('Nilar AI')").start()
-            }
-        }
-    }
-}
 
 // Modern Glassmorphic Dark Theme Palette
 private val DarkBg = Color(0xFF070B14)
@@ -187,57 +130,28 @@ fun main() {
                 bringToFrontTrigger = System.currentTimeMillis()
             }
 
-            val runtime = remember {
-                DesktopRuntime(
-                    onExitRequested = {
-                        DesktopLogger.info("Runtime requested exitApplication()")
-                        exitApplication()
-                    },
-                    onMainWindowRequested = bringToFront,
-                    onToggleMainWindowRequested = {
-                        if (mainWindowVisible && !windowState.isMinimized) {
-                            DesktopLogger.info("Toggle main window -> hiding to background")
-                            mainWindowVisible = false
-                        } else {
-                            DesktopLogger.info("Toggle main window -> bringing to front")
-                            bringToFront()
-                        }
-                    },
-                )
-            }
+            val bootstrap = rememberAppBootstrap(
+                onExitRequested = {
+                    DesktopLogger.info("Runtime requested exitApplication()")
+                    exitApplication()
+                },
+                onMainWindowRequested = bringToFront,
+                onToggleMainWindowRequested = {
+                    if (mainWindowVisible && !windowState.isMinimized) {
+                        DesktopLogger.info("Toggle main window -> hiding to background")
+                        mainWindowVisible = false
+                    } else {
+                        DesktopLogger.info("Toggle main window -> bringing to front")
+                        bringToFront()
+                    }
+                },
+            )
+            val runtime = bootstrap.runtime
             var robotVisible by remember { mutableStateOf(runtime.storedRobotVisible()) }
-
-            DisposableEffect(runtime) {
-                DesktopLogger.info("Main calling runtime.start()")
-                runtime.start()
-                onDispose {
-                    DesktopLogger.info("Main disposing runtime -> runtime.close()")
-                    runtime.close()
-                }
-            }
 
             // File-based IPC listener: Detect when user clicks Desktop shortcut while app is already running
             LaunchedEffect(Unit) {
-                val dir = Path.of(System.getenv("APPDATA"), "VoiceBrainLive")
-                val trigger = dir.resolve("show_window.trigger")
-                var lastModified = if (Files.exists(trigger)) {
-                    runCatching { Files.getLastModifiedTime(trigger).toMillis() }.getOrDefault(0L)
-                } else {
-                    0L
-                }
-                while (true) {
-                    delay(200)
-                    runCatching {
-                        if (Files.exists(trigger)) {
-                            val currentModified = Files.getLastModifiedTime(trigger).toMillis()
-                            if (currentModified > lastModified) {
-                                lastModified = currentModified
-                                DesktopLogger.info("Detected show_window.trigger changed ($currentModified) -> bringing window to front")
-                                bringToFront()
-                            }
-                        }
-                    }
-                }
+                awaitShowWindowTriggers(bringToFront)
             }
 
         FloatingRobotWindow(
