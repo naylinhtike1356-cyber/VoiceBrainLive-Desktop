@@ -187,7 +187,16 @@ class AssistantController(
         }
     }
 
-    fun updateStatus(text: String) {
+    /**
+     * Updates the status line. An explicit [phase] always wins; when omitted the
+     * phase is inferred from the text as before (M3 keeps inference only as a
+     * fallback so existing UI behavior is unchanged).
+     *
+     * Connection lifecycle callers must pass the phase explicitly instead of
+     * relying on keyword inference — e.g. "Disconnected" contains "connect"
+     * and must never resolve to CONNECTING.
+     */
+    fun updateStatus(text: String, phase: AssistantPhase? = null) {
         val normalized = text.lowercase()
         val connectionLost = normalized.contains("disconnect") ||
             normalized.contains("timeout") ||
@@ -195,20 +204,29 @@ class AssistantController(
             normalized.contains("မအောင်မြင်") ||
             normalized.contains("မရနိုင်") ||
             normalized.contains("မအသင့်")
-        val phase = when {
+        _state.value = _state.value.copy(
+            status = text,
+            phase = phase ?: inferPhase(normalized),
+            isConnected = if (connectionLost) false else _state.value.isConnected,
+        )
+    }
+
+    private fun inferPhase(normalized: String): AssistantPhase {
+        // Negative connection keywords take precedence: "Disconnected" contains
+        // "connect" but is a loss, not a connection attempt; "မချိတ်ဆက်နိုင်ပါ"
+        // (cannot connect) is a failure, not CONNECTING.
+        val connectionNegative = normalized.contains("disconnect") ||
+            normalized.contains("မချိတ်ဆက်")
+        return when {
+            connectionNegative -> AssistantPhase.ERROR
             normalized.contains("connect") || normalized.contains("ချိတ်ဆက်") -> AssistantPhase.CONNECTING
             normalized.contains("နားထောင်") || normalized.contains("listen") -> AssistantPhase.LISTENING
             normalized.contains("အတည်ပြု") || normalized.contains("confirm") -> AssistantPhase.CONFIRMING
-            normalized.contains("error") || normalized.contains("မအောင်မြင်") || normalized.contains("မချိတ်ဆက်") -> AssistantPhase.ERROR
+            normalized.contains("error") || normalized.contains("မအောင်မြင်") -> AssistantPhase.ERROR
             normalized.contains("ပြော") || normalized.contains("speaking") || normalized.contains("ဖြေကြား") -> AssistantPhase.SPEAKING
             normalized.contains("sending") || normalized.contains("လုပ်ဆောင်") || normalized.contains("စဉ်းစား") -> AssistantPhase.THINKING
             else -> AssistantPhase.READY
         }
-        _state.value = _state.value.copy(
-            status = text,
-            phase = phase,
-            isConnected = if (connectionLost) false else _state.value.isConnected,
-        )
     }
 
     fun updateListening(value: Boolean) {

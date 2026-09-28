@@ -3,6 +3,7 @@ package com.example.voicebrainlive.desktop.platform
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -43,14 +44,17 @@ class HealthWatchdog(
     private val startTimeMillis = System.currentTimeMillis()
     @Volatile private var consecutiveFailures = 0
     @Volatile private var isRunning = false
+    private var previousUncaughtHandler: Thread.UncaughtExceptionHandler? = null
+    private var installedUncaughtHandler: Thread.UncaughtExceptionHandler? = null
 
     fun install() {
         if (isRunning) return
         isRunning = true
 
         // 1. Global Uncaught Exception Handler
-        val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
-        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+        previousUncaughtHandler = Thread.getDefaultUncaughtExceptionHandler()
+        val previousHandler = previousUncaughtHandler
+        val handler = Thread.UncaughtExceptionHandler { thread, throwable ->
             DesktopLogger.error("HealthWatchdog caught unhandled exception on [${thread.name}]", throwable)
             recordCrashLog(thread.name, throwable)
             onSafeStateReset("စနစ်တွင် မမျှော်လင့်သော error တစ်ခုဖြစ်ပေါ်ခဲ့သဖြင့် safe state သို့ အလိုအလျောက် ပြန်လည်နိုးထစေခဲ့ပါသည်")
@@ -59,26 +63,53 @@ class HealthWatchdog(
                 previousHandler?.uncaughtException(thread, throwable)
             }
         }
+        installedUncaughtHandler = handler
+        Thread.setDefaultUncaughtExceptionHandler(handler)
 
         // 2. Network & Liveness Heartbeat Watchdog
         scope.launch {
             while (isActive) {
                 delay(10_000) // check every 10 seconds
-                runCatching {
-                    val online = isOnlineProvider()
-                    if (!online) {
-                        consecutiveFailures++
-                        val backoffDelay = calculateBackoffDelay(consecutiveFailures)
-                        DesktopLogger.info("HealthWatchdog: Connection offline (attempt #$consecutiveFailures). Retrying in ${backoffDelay / 1000}s...")
-                        delay(backoffDelay)
-                        onAutoReconnect()
-                    } else {
-                        consecutiveFailures = 0
-                    }
+                // M1: an exception thrown by the provider itself is a bug in the
+                // check, NOT evidence of lost connectivity — never treat it as
+                // offline and never let it kill the watchdog loop.
+                val online = try {
+                    isOnlineProvider()
+                } catch (t: Throwable) {
+                    DesktopLogger.error(
+                        "HealthWatchdog: online check threw ${t::class.simpleName}; treating as unknown (not offline)",
+                        t
+                    )
+                    true
+                }
+                if (!online) {
+                    consecutiveFailures++
+                    val backoffDelay = calculateBackoffDelay(consecutiveFailures)
+                    DesktopLogger.info("HealthWatchdog: Connection offline (attempt #$consecutiveFailures). Retrying in ${backoffDelay / 1000}s...")
+                    delay(backoffDelay)
+                    onAutoReconnect()
+                } else {
+                    consecutiveFailures = 0
                 }
             }
         }
         DesktopLogger.info("HealthWatchdog installed and monitoring.")
+    }
+
+    /**
+     * Stops the heartbeat and restores the uncaught exception handler that was
+     * in place before [install] (M4). Safe to call when not installed.
+     */
+    fun stop() {
+        if (!isRunning) return
+        isRunning = false
+        runCatching { scope.cancel("HealthWatchdog stopped") }
+        if (Thread.getDefaultUncaughtExceptionHandler() === installedUncaughtHandler) {
+            Thread.setDefaultUncaughtExceptionHandler(previousUncaughtHandler)
+        }
+        installedUncaughtHandler = null
+        previousUncaughtHandler = null
+        DesktopLogger.info("HealthWatchdog stopped.")
     }
 
     fun getHealthReport(isAudioActive: Boolean): AppHealthReport {

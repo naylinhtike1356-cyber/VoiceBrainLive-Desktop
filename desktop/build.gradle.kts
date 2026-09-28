@@ -22,6 +22,8 @@ dependencies {
     implementation(libs.okhttp)
     implementation("com.github.kwhat:jnativehook:2.2.2")
     implementation("org.json:json:20240303")
+    implementation("net.java.dev.jna:jna:5.14.0")
+    implementation("net.java.dev.jna:jna-platform:5.14.0")
     testImplementation(libs.junit)
     testImplementation("org.jetbrains.kotlin:kotlin-test")
 }

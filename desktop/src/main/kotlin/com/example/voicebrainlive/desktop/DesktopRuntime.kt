@@ -26,6 +26,7 @@ import com.example.voicebrainlive.desktop.platform.HealthWatchdog
 import com.example.voicebrainlive.desktop.platform.LowPowerOptimizer
 import com.example.voicebrainlive.desktop.platform.PowerMode
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -57,7 +58,7 @@ class DesktopRuntime(
     val offlineEngine = HybridOfflineFallbackEngine(commandExecutor)
     val powerOptimizer = LowPowerOptimizer(
         onThrottleStateChanged = { mode ->
-            if (mode == PowerMode.THROTTLED_IDLE && !listening) {
+            if (mode == PowerMode.THROTTLED_IDLE && !listening.get()) {
                 audio.stopMicrophone()
             }
         }
@@ -84,9 +85,10 @@ class DesktopRuntime(
     val compoundCommandHandler = CompoundCommandHandler(commandExecutor)
     val planDecomposer = PlanDecomposer(compoundCommandHandler)
     val goalEngine = AutonomousGoalEngine(commandExecutor, planDecomposer)
-    private var listening = false
+    private val listening = AtomicBoolean(false)
     private var liveConversationMode = false
     @Volatile private var reconnectInProgress = false
+    private val pendingPowerCallLock = Any()
     private var pendingPowerCall: PendingPowerCall? = null
     private var robotVisible = apiKeyStore.loadRobotVisible()
     // Tool availability is no longer controlled by the old Settings toggle.
@@ -139,7 +141,7 @@ class DesktopRuntime(
                 controller.updateSpeaking(isSpeaking)
                 if (isSpeaking) {
                     controller.updateStatus("🔊 ဖြေကြားနေပါတယ်…")
-                } else if (listening) {
+                } else if (listening.get()) {
                     controller.updateStatus("အသင့်ဖြစ်ပါပြီ — 🎤 နားထောင်နေပါသည်")
                 } else {
                     controller.updateStatus("အသင့်ဖြစ်ပါပြီ")
@@ -274,7 +276,7 @@ class DesktopRuntime(
                     val result = executeDesktopCommand(DesktopCommand(commandType, target, value))
                     controller.updateResponse(result.message)
                     if (result.requiresConfirmation) {
-                        pendingPowerCall = PendingPowerCall(callId, DesktopCommand(commandType, target, value))
+                        synchronized(pendingPowerCallLock) { pendingPowerCall = PendingPowerCall(callId, DesktopCommand(commandType, target, value)) }
                         controller.updateStatus("အသံဖြင့် အတည်ပြုချက်ကို စောင့်နေပါတယ်")
                         session.sendText("အရေးကြီးပါတယ်။ ${result.message} အသံနဲ့ အတည်ပြုလိုပါသလား။ အတည်ပြုမယ်ဆိုရင် ဟုတ်ကဲ့ သို့မဟုတ် Confirm လို့ ပြောပါ။ မလုပ်လိုရင် မလုပ်ပါနဲ့ သို့မဟုတ် Cancel လို့ ပြောပါ။")
                     } else {
@@ -304,20 +306,27 @@ class DesktopRuntime(
 
     fun desktopAutomationEnabled(): Boolean = desktopAutomationEnabled
 
+    /**
+     * Swaps the live session while keeping the SAME AssistantController, so
+     * Compose keeps observing the same StateFlow (H3). The controller
+     * disconnects the old session internally.
+     */
+    private fun swapSession(newKey: String) {
+        val newSession = createSession(newKey)
+        controller.replaceSession(newSession)
+        session = newSession
+    }
+
     fun saveDesktopAutomationEnabled(enabled: Boolean) {
-        desktopAutomationEnabled = true
-        apiKeyStore.saveDesktopAutomationEnabled(true)
-        session.disconnect()
-        session = createSession(apiKeyStore.load())
-        controller = AssistantController(session)
+        desktopAutomationEnabled = enabled
+        apiKeyStore.saveDesktopAutomationEnabled(enabled)
+        swapSession(apiKeyStore.load())
         connectGemini()
     }
 
     fun saveGeminiModel(newModel: String) {
         apiKeyStore.saveGeminiModel(newModel)
-        session.disconnect()
-        session = createSession(apiKeyStore.load())
-        controller = AssistantController(session)
+        swapSession(apiKeyStore.load())
         connectGemini()
     }
 
@@ -468,7 +477,7 @@ class DesktopRuntime(
             }
             "switch_user_profile" -> {
                 val res = profileManager.switchProfile(targetVal)
-                session = createSession(apiKeyStore.load())
+                swapSession(apiKeyStore.load())
                 controller.updateStatus(res)
                 CommandResult(true, res)
             }
@@ -533,9 +542,7 @@ class DesktopRuntime(
 
     fun clearApiKey() {
         apiKeyStore.save("")
-        session.disconnect()
-        session = createSession("")
-        controller = AssistantController(session)
+        swapSession("")
     }
 
     suspend fun testGeminiKey(key: String): Result<String> {
@@ -544,9 +551,7 @@ class DesktopRuntime(
 
     fun saveApiKey(newKey: String) {
         apiKeyStore.save(newKey)
-        session.disconnect()
-        session = createSession(newKey)
-        controller = AssistantController(session)
+        swapSession(newKey)
         connectGemini()
     }
 
@@ -554,14 +559,14 @@ class DesktopRuntime(
         scope.launch {
             var lastError = "Connection failed"
             repeat(CONNECT_ATTEMPTS) { attempt ->
-                controller.updateStatus("Gemini ချိတ်ဆက်နေပါတယ်… (${attempt + 1}/$CONNECT_ATTEMPTS)")
+                controller.updateStatus("Gemini ချိတ်ဆက်နေပါတယ်… (${attempt + 1}/$CONNECT_ATTEMPTS)", AssistantPhase.CONNECTING)
                 val result = controller.connect()
                 if (result.isSuccess) return@launch
                 lastError = result.exceptionOrNull()?.message ?: lastError
                 DesktopLogger.warn("Gemini connect attempt ${attempt + 1} failed: $lastError")
                 if (attempt < CONNECT_ATTEMPTS - 1) delay(RECONNECT_DELAY_MS * (attempt + 1))
             }
-            controller.updateStatus("မချိတ်ဆက်နိုင်ပါ — $lastError")
+            controller.updateStatus("မချိတ်ဆက်နိုင်ပါ — $lastError", AssistantPhase.ERROR)
         }
     }
 
@@ -589,7 +594,7 @@ class DesktopRuntime(
     }
 
     fun toggleListening() {
-        if (listening) {
+        if (listening.get()) {
             stopListening(userInitiated = true)
         } else {
             audio.stopPlayback()
@@ -621,12 +626,12 @@ class DesktopRuntime(
     }
 
     private fun startListeningInternal() {
-        if (listening) return
+        // Atomic check-and-set: concurrent toggles cannot both enter.
+        if (!listening.compareAndSet(false, true)) return
         audio.stopPlayback()
         userSpeechDetectedForTurn = false
         liveAudioReceivedForTurn = false
         synchronized(inputTranscriptBuffer) { inputTranscriptBuffer.setLength(0) }
-        listening = true
         session.clearAudioBuffer()
         controller.updateListening(true)
         val microphoneStarted = audio.startMicrophone(
@@ -643,7 +648,7 @@ class DesktopRuntime(
             },
             onVolumeLevel = { level -> _liveVolumeLevel.value = level },
             onSilenceDetected = {
-                if (listening && liveConversationMode && session.isLiveReady()) {
+                if (listening.get() && liveConversationMode && session.isLiveReady()) {
                     scope.launch {
                         val result = session.flushAudioTurn()
                         if (result.isFailure) {
@@ -662,7 +667,7 @@ class DesktopRuntime(
             },
         )
         if (!microphoneStarted) {
-            listening = false
+            listening.set(false)
             liveConversationMode = false
             controller.updateListening(false)
             controller.updateStatus("Microphone မဖွင့်နိုင်ပါ — Windows input device/permission ကို စစ်ပါ")
@@ -673,14 +678,14 @@ class DesktopRuntime(
     }
 
     private fun stopListening(userInitiated: Boolean = false) {
-        if (!listening) {
+        // Atomic take: exactly one caller performs the stop transition.
+        if (!listening.getAndSet(false)) {
             if (userInitiated) liveConversationMode = false
             return
         }
         if (userInitiated) {
             liveConversationMode = false
         }
-        listening = false
         _liveVolumeLevel.value = 0f
         audio.stopMicrophone()
         controller.updateListening(false)
@@ -703,11 +708,13 @@ class DesktopRuntime(
         type.lowercase() in setOf("shutdown", "restart", "sleep")
 
     private fun requestLocalPowerConfirmation(command: DesktopCommand) {
-        if (pendingPowerCall != null) {
-            controller.updateStatus("အရင်တောင်းထားသော အတည်ပြုချက်ကို စောင့်နေပါတယ်။")
-            return
+        synchronized(pendingPowerCallLock) {
+            if (pendingPowerCall != null) {
+                controller.updateStatus("အရင်တောင်းထားသော အတည်ပြုချက်ကို စောင့်နေပါတယ်။")
+                return
+            }
+            pendingPowerCall = PendingPowerCall(null, command)
         }
-        pendingPowerCall = PendingPowerCall(null, command)
         val actionText = when (command.type.lowercase()) {
             "shutdown" -> "ကွန်ပျူတာကို ပိတ်ပါမယ်"
             "restart" -> "ကွန်ပျူတာကို ပြန်စပါမယ်"
@@ -722,7 +729,7 @@ class DesktopRuntime(
     }
 
     private fun handlePowerConfirmation(text: String) {
-        if (pendingPowerCall == null) return
+        synchronized(pendingPowerCallLock) { if (pendingPowerCall == null) return }
         val normalized = text.trim().lowercase()
         val no = listOf("မလုပ်", "မလုပ်ပါ", "မလုပ်နဲ့", "မလုပ်ပါနဲ့", "မဟုတ်", "မဟုတ်ဘူး", "cancel", "no", "မလုပ်တော့")
         val yes = listOf("အတည်ပြု", "အတည်ပြုပါတယ်", "ဟုတ်", "ဟုတ်ကဲ့", "လုပ်ပါ", "လုပ်လို", "confirm", "yes", "ok")
@@ -739,8 +746,11 @@ class DesktopRuntime(
     }
 
     private fun confirmPowerAction() {
-        val pending = pendingPowerCall ?: return
-        pendingPowerCall = null
+        val pending = synchronized(pendingPowerCallLock) {
+            val p = pendingPowerCall
+            pendingPowerCall = null
+            p
+        } ?: return
         scope.launch {
             val result = executeDesktopCommand(pending.command.copy(value = "confirmed"))
             controller.recordAction(pending.command.type, result)
@@ -753,8 +763,11 @@ class DesktopRuntime(
     }
 
     private fun cancelPowerAction() {
-        val pending = pendingPowerCall ?: return
-        pendingPowerCall = null
+        val pending = synchronized(pendingPowerCallLock) {
+            val p = pendingPowerCall
+            pendingPowerCall = null
+            p
+        } ?: return
         val cancelled = CommandResult(success = false, message = "စက်ပိတ်ခြင်းကို ပယ်ဖျက်လိုက်ပါပြီရှင်။")
         controller.recordAction(pending.command.type, cancelled)
         controller.updateStatus("မလုပ်တော့ပါ")
@@ -796,6 +809,7 @@ class DesktopRuntime(
         if (closed) return
         closed = true
         stopListening()
+        watchdog.stop()
         hotkey.unregister()
         tray.remove()
         audio.close()

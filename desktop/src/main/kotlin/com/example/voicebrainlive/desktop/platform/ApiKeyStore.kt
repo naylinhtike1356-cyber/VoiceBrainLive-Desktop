@@ -1,6 +1,7 @@
 package com.example.voicebrainlive.desktop.platform
 
 import java.io.File
+import java.util.Base64
 import java.util.prefs.Preferences
 
 /**
@@ -11,8 +12,23 @@ class ApiKeyStore {
     private val preferences = Preferences.userRoot().node(PREFERENCES_NODE)
 
     fun load(): String {
+        // 0. DPAPI-encrypted key (preferred on Windows).
+        val dpapi = preferences.get(KEY_GEMINI_DPAPI, "").trim()
+        if (dpapi.isNotBlank()) {
+            val plain = runCatching {
+                DpapiCredentialStore.unprotect(Base64.getDecoder().decode(dpapi))
+                    ?.toString(Charsets.UTF_8)?.trim()
+            }.getOrNull().orEmpty()
+            if (plain.isNotBlank()) return plain
+            DesktopLogger.warn("Stored DPAPI credential could not be decrypted; trying other key sources.")
+        }
+
         val stored = preferences.get(KEY_GEMINI, "").trim()
-        if (stored.isNotBlank()) return stored
+        if (stored.isNotBlank()) {
+            // Migrate legacy plaintext to DPAPI when available.
+            if (DpapiCredentialStore.isAvailable()) save(stored)
+            return stored
+        }
 
         // 1. Try local.properties in project root or sibling phone project
         val localPropKey = readPropertyFromFiles("GEMINI_API_KEY")
@@ -51,11 +67,29 @@ class ApiKeyStore {
     fun hasGeminiKey(): Boolean = load().isNotBlank()
 
     fun save(value: String) {
-        saveValue(KEY_GEMINI, value)
+        val clean = value.trim()
+        if (clean.isBlank()) {
+            remove(KEY_GEMINI)
+            remove(KEY_GEMINI_DPAPI)
+            return
+        }
+        val encrypted = DpapiCredentialStore.protect(clean.toByteArray(Charsets.UTF_8))
+        if (encrypted != null) {
+            preferences.put(KEY_GEMINI_DPAPI, Base64.getEncoder().encodeToString(encrypted))
+            preferences.remove(KEY_GEMINI) // drop legacy plaintext once encrypted
+            flush()
+            DesktopLogger.info("API key stored with DPAPI encryption.")
+        } else {
+            // Non-Windows or JNA missing: keep legacy plaintext so dev/test
+            // flows keep working. Never expected on the production machine.
+            DesktopLogger.warn("DPAPI unavailable on this platform — API key stored unencrypted (dev/test only).")
+            saveValue(KEY_GEMINI, clean)
+        }
     }
 
     fun clear() {
         remove(KEY_GEMINI)
+        remove(KEY_GEMINI_DPAPI)
     }
 
     fun loadRobotVisible(): Boolean = preferences.getBoolean(KEY_ROBOT_VISIBLE, true)
@@ -137,6 +171,7 @@ class ApiKeyStore {
     companion object {
         private const val PREFERENCES_NODE = "VoiceBrainLive"
         private const val KEY_GEMINI = "gemini_api_key"
+        private const val KEY_GEMINI_DPAPI = "gemini_api_key_dpapi"
         private const val KEY_GEMINI_MODEL = "gemini_model"
         private const val KEY_ROBOT_VISIBLE = "robot_visible"
         private const val KEY_DESKTOP_AUTOMATION_ENABLED = "desktop_automation_enabled"

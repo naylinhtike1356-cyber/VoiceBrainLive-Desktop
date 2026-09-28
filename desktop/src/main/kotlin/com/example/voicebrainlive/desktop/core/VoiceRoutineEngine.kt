@@ -46,9 +46,14 @@ class VoiceRoutineEngine(
     @Synchronized
     fun findMatchingRoutine(phrase: String): VoiceRoutine? {
         val clean = phrase.trim().lowercase()
+        // M6: blank or very short phrases must never match — an empty trigger
+        // would match every routine via String.contains("").
+        if (clean.length < MIN_TRIGGER_LENGTH) return null
         return routines.find { r ->
             r.enabled && r.triggerPhrases.any { trigger ->
-                clean.contains(trigger.lowercase()) || trigger.lowercase().contains(clean)
+                val t = trigger.trim().lowercase()
+                t.length >= MIN_TRIGGER_LENGTH &&
+                    (clean.contains(t) || t.contains(clean))
             }
         }
     }
@@ -58,22 +63,32 @@ class VoiceRoutineEngine(
             ?: return CommandResult(false, "Routine '$nameOrPhrase' ရှာမတွေ့ပါ။ (ရနိုင်သော Routines များ: ${routines.joinToString { it.name }})")
 
         DesktopLogger.info("Executing Voice Routine: ${routine.name} (${routine.actions.size} actions)")
-        var successCount = 0
+        val failedSteps = mutableListOf<String>()
 
         for (action in routine.actions) {
-            val res = executor.execute(action)
-            if (res.success) successCount++
+            val res = runCatching { executor.execute(action) }
+                .getOrElse { CommandResult(false, it.message ?: "exception") }
+            if (!res.success) failedSteps.add(action.type)
             delay(150) // Smooth delay between multi-step launches
         }
 
+        // M6: the volume step counts too — a failed set_volume must not be
+        // silently swallowed by an unconditional success = true.
         if (routine.volumePercent != null) {
-            executor.execute(DesktopCommand("set_volume", null, routine.volumePercent.toString()))
+            val volumeRes = runCatching {
+                executor.execute(DesktopCommand("set_volume", null, routine.volumePercent.toString()))
+            }.getOrElse { CommandResult(false, it.message ?: "exception") }
+            if (!volumeRes.success) failedSteps.add("set_volume")
         }
 
-        return CommandResult(
-            success = true,
-            message = routine.responseBurmese
-        )
+        return if (failedSteps.isEmpty()) {
+            CommandResult(success = true, message = routine.responseBurmese)
+        } else {
+            CommandResult(
+                success = false,
+                message = "${routine.responseBurmese}\n⚠️ အောက်ပါ အဆင့်များ မအောင်မြင်ပါ: ${failedSteps.joinToString(", ")}"
+            )
+        }
     }
 
     @Synchronized
@@ -234,5 +249,14 @@ class VoiceRoutineEngine(
         }.onFailure {
             DesktopLogger.warn("Failed to save voice routines: ${it.message}")
         }
+    }
+
+    companion object {
+        /**
+         * Minimum trigger/phrase length (in UTF-16 units) for routine matching.
+         * Rejects blank input and 1-2 character noise that would otherwise
+         * match unrelated routines.
+         */
+        const val MIN_TRIGGER_LENGTH = 3
     }
 }
