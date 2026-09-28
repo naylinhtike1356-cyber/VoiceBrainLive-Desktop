@@ -27,7 +27,7 @@ data class VoiceRoutine(
  * Replaces and extends MacroManager with customizable, persistent JSON routine definitions.
  */
 class VoiceRoutineEngine(
-    private val executor: WindowsCommandExecutor = WindowsCommandExecutor(),
+    private val executor: PlatformCommandExecutor = WindowsCommandExecutor(),
     private val routinesFile: File = File(System.getProperty("user.home"), ".voicebrainlive/voice_routines.json")
 ) {
     private val routines = mutableListOf<VoiceRoutine>()

@@ -20,13 +20,17 @@ class AutonomousGoalEngineTest {
 
     @Test
     fun testDecomposeWirelessAndroidGoal() {
+        // The Android wireless-deploy / Notion-sync templates were removed
+        // along with the extracted automation and notion plugins. Decompose
+        // must no longer emit those dead command types for this intent.
         val intent = "Android ဖုန်းကို wireless ချိတ်ပြီး VoiceBrainLive project ကို build စစ်ပေး၊ Notion မှာ task update ပေးပါ"
         val goal = engine.decomposer.decompose(intent)
 
-        assertTrue(goal.steps.size >= 3)
-        assertEquals("check_adb_devices", goal.steps[0].command.type)
-        assertEquals("run_android_build_test", goal.steps[1].command.type)
-        assertEquals("sync_task_to_notion", goal.steps[2].command.type)
+        val deadTypes = setOf(
+            "check_adb_devices", "run_android_build_test", "sync_task_to_notion",
+            "auto_heal_project", "git_commit_fix", "git_repo_status_all"
+        )
+        assertTrue(goal.steps.none { it.command.type in deadTypes })
     }
 
     @Test

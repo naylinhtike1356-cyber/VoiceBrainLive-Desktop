@@ -63,10 +63,12 @@ class EyesHandsOmniTest {
     }
 
     @Test
-    fun omniAppCatalogInitializesAndTracks() {
-        val catalog = OmniAppCatalog()
-        assertNotNull(catalog.getCatalogStats())
-        val searchBlank = catalog.findAndLaunchApp("   ")
+    fun openAppRejectsBlankQuery() = runBlocking {
+        // OmniAppCatalog was removed; openApp + the dynamic StartApps index is
+        // the single launcher path. A blank query must fail, never launch a
+        // random app via a "" fuzzy match.
+        val executor = WindowsCommandExecutor()
+        val searchBlank = executor.execute(DesktopCommand("open_app", "   "))
         assertTrue(!searchBlank.success)
     }
 
@@ -89,16 +91,10 @@ class EyesHandsOmniTest {
     }
 
     @Test
-    fun omniAppCatalogHandlesProcessStateAndToggle() {
-        val catalog = OmniAppCatalog()
-        val blankToggle = catalog.toggleAppByIcon("   ")
-        assertTrue(!blankToggle.success)
-
-        val blankClose = catalog.closeAppByIcon("   ")
-        assertTrue(!blankClose.success)
-
-        val notRunning = catalog.isAppRunning("non_existent_app_12345")
-        assertTrue(!notRunning)
+    fun openAppRejectsUnknownApp() = runBlocking {
+        val executor = WindowsCommandExecutor()
+        val notFound = executor.execute(DesktopCommand("open_app", "non_existent_app_12345"))
+        assertTrue(!notFound.success)
     }
 
     @Test

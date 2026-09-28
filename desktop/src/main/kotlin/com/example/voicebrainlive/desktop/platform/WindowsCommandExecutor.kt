@@ -276,7 +276,12 @@ class WindowsCommandExecutor : PlatformCommandExecutor {
         for (verb in burmeseVerbs) {
             clean = clean.replace(verb, "").trim()
         }
-        if (clean.isBlank()) clean = rawName.trim().lowercase()
+        // Blank input must never reach the lookup chain: "".contains("") is
+        // true, so a blank query would fuzzy-match the first catalog entry
+        // and launch a random app.
+        if (clean.isBlank()) {
+            return CommandResult(false, "App အမည် မပါဝင်ပါ — ဖွင့်လိုသော App အမည်ကို ပြောပေးပါရှင်။")
+        }
         val normalized = normalize(clean)
 
         if (normalized.contains("minus") || normalized.contains("minimize") || normalized == "min") {
@@ -464,18 +469,24 @@ class WindowsCommandExecutor : PlatformCommandExecutor {
 
         val files = ensureFileIndex()
         val tokens = cleanQuery.split(Regex("\\s+"))
-        val matches = files.mapNotNull { file ->
+        // Explicit types throughout: K2 cannot infer the Pair type through
+        // mapNotNull + sumOf overloads here (previously 15 inference errors).
+        // Scoring logic is unchanged: sum of per-token weights.
+        val scored = ArrayList<Pair<File, Int>>(files.size)
+        for (file in files) {
             val haystack = file.name.lowercase()
-            val score = tokens.sumOf { token ->
-                when {
+            var score = 0
+            for (token in tokens) {
+                score += when {
                     haystack == token -> 100
                     haystack.startsWith(token) -> 50
                     haystack.contains(token) -> 20
                     else -> 0
                 }
             }
-            if (score > 0) file to score else null
-        }.sortedByDescending { it.second }.take(25).map { it.first }
+            if (score > 0) scored.add(Pair(file, score))
+        }
+        val matches: List<File> = scored.sortedByDescending { it.second }.take(25).map { it.first }
 
         if (matches.isEmpty()) return CommandResult(true, "‘$query’ နဲ့ ကိုက်ညီတဲ့ file မတွေ့ပါရှင်။ Approved user folders အတွင်းမှာ ရှာထားပါတယ်။")
         val summary = matches.joinToString("\n") { "• ${it.name} — ${it.absolutePath}" }
