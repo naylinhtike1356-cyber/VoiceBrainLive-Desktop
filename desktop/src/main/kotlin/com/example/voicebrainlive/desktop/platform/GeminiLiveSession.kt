@@ -313,7 +313,13 @@ class GeminiLiveSession(
             put("setup", JSONObject().apply {
                 put("model", model)
                 put("generationConfig", JSONObject().apply {
-                    put("responseModalities", JSONArray().apply { put("AUDIO"); put("TEXT") })
+                    // The Live API accepts exactly ONE response modality per session
+                    // (AUDIO or TEXT, never both) — sending ["AUDIO","TEXT"]
+                    // makes the server reject the setup and the client loops in
+                    // "reconnecting" forever. Text for the conversation list
+                    // comes from input/outputAudioTranscription below, which is
+                    // the supported mechanism alongside AUDIO.
+                    put("responseModalities", JSONArray().apply { put("AUDIO") })
                     // Keep spoken replies short: ~300 tokens caps a turn at
                     // roughly 1–2 minutes of fast speech, well beyond the
                     // 1–2 sentence conversational target in the instructions.

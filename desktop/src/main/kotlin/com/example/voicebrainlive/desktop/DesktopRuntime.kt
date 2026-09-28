@@ -107,6 +107,8 @@ class DesktopRuntime(
     private val listening = AtomicBoolean(false)
     private var liveConversationMode = false
     @Volatile private var reconnectInProgress = false
+    /** Last time an automatic mic-open greeting was spoken (double-tap guard). */
+    @Volatile private var lastMicOpenGreetingNanos = 0L
     private val pendingPowerCallLock = Any()
     private var pendingPowerCall: PendingPowerCall? = null
     private var robotVisible = apiKeyStore.loadRobotVisible()
@@ -813,9 +815,26 @@ class DesktopRuntime(
                     return@launch
                 }
                 startListeningInternal()
-                // Direct-input mode: do not speak an automatic greeting here.
-                // The first microphone audio must belong to the user so the
-                // initial turn cannot be blocked by greeting playback/echo.
+                // Mic-open greeting: the user explicitly asked for a spoken
+                // greeting the moment the mic opens. Sent as a Live turn so it
+                // uses the assistant's own voice — and if the greeting plays,
+                // the full mic→server→speaker loop is proven healthy.
+                // Guarded to live-ready only (no REST fallback for this trigger)
+                // and throttled against accidental double-taps.
+                val nowNanos = System.nanoTime()
+                if (session.isLiveReady() &&
+                    nowNanos - lastMicOpenGreetingNanos > 10_000_000_000L
+                ) {
+                    lastMicOpenGreetingNanos = nowNanos
+                    scope.launch {
+                        session.sendAssistantPrompt(
+                            "[System event: the user just opened the microphone. " +
+                                "Greet them warmly in Burmese with one short sentence, " +
+                                "then wait silently for them to speak. " +
+                                "Do not explain anything.]"
+                        )
+                    }
+                }
             }
         }
     }
