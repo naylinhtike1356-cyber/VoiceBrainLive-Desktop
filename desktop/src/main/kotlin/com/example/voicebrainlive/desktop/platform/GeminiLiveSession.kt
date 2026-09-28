@@ -1059,36 +1059,30 @@ class GeminiLiveSession(
         val commandTypes = arrayOf(
             "mouse_click", "mouse_double_click", "mouse_right_click", "mouse_move", "mouse_scroll", "mouse_drag",
             "click_ui_element", "inspect_window_ui", "snap_window_left", "snap_window_right", "snap_window_up", "snap_window_down", "new_tab", "switch_tab",
-            "click_desktop_icon", "close_desktop_icon", "toggle_app", "click_normalized", "show_desktop", "type_text_physical", "screen_eyes", "refresh_app_catalog",
+            "click_desktop_icon", "close_desktop_icon", "toggle_app", "click_normalized", "show_desktop", "type_text_physical", "screen_eyes",
             "open_app", "close_app", "search_web", "search_youtube", "search_files", "find_file", "open_file", "open_url",
             "open_folder", "open_downloads", "open_documents", "open_desktop", "open_recycle_bin", "empty_recycle_bin",
             "get_current_time", "get_current_date", "open_settings", "open_network_settings", "open_bluetooth_settings",
             "open_display_settings", "open_sound_settings", "take_screenshot", "volume_up", "volume_down", "mute",
             "lock_computer", "shutdown", "restart", "sleep", "system_status", "get_system_info", "diagnose_network",
             "get_battery_status", "list_running_apps", "copy_to_clipboard", "run_powershell_safe", "refresh_file_index",
-            "get_active_window", "ide_open_file", "ide_open_project", "open_in_vscode", "open_in_studio", "ide_status",
-            "adb_enable_tcpip", "adb_connect_wireless", "adb_pair_wireless", "adb_devices_detailed", "adb_logcat_crash",
-            "adb_device_screenshot", "adb_install_apk", "git_status", "git_repo_status_all", "git_switch_branch",
-            "git_pull_repo", "git_commit", "git_push", "build_project", "solve_project_issue", "auto_heal_project",
-            "launch_coding_agent", "run_android_build_test", "verify_app_on_emulator", "git_commit_fix", "check_adb_devices",
-            "notion_test", "notion_search", "notion_get_page_content", "notion_create_page", "notion_add_note", "notion_create_task",
-            "notion_append_note", "notion_append_to_page", "notion_update_page_title", "notion_archive_page", "notion_delete_page",
-            "notion_delete_block", "open_notion_page", "remember_user_fact", "get_user_memory", "run_work_macro", "switch_user_profile",
+            "get_active_window",
+            "remember_user_fact", "get_user_memory", "run_voice_routine", "run_work_macro", "switch_user_profile",
             "analyze_screen", "read_clipboard", "media_play_pause", "media_next", "media_prev", "minimize_all", "maximize_window",
             "minimize_window", "close_window", "close_tab", "brightness_up", "brightness_down",
             "execute_goal", "chain_commands", "cancel_goal"
         )
         val properties = JSONObject()
             .put("command_type", JSONObject().put("type", "string").put("enum", JSONArray(commandTypes.toList())).put("description", "Choose exactly one action from the enum. Do not call a tool for ordinary conversation."))
-            .put("target", JSONObject().put("type", "string").put("description", "Target: Project name, app name, memory fact key/query, macro name, profile name, file query, URL, Notion query/page ID/block ID/page title, PowerShell script, path"))
-            .put("value", JSONObject().put("type", "string").put("description", "Value: Issue description for project, page content, new page title, task details, memory fact value, optional secondary value"))
+            .put("target", JSONObject().put("type", "string").put("description", "Target: app name, memory fact key/query, macro name, profile name, file query, URL, PowerShell script, path"))
+            .put("value", JSONObject().put("type", "string").put("description", "Value: memory fact value, optional secondary value"))
         val schema = JSONObject()
             .put("type", "object")
             .put("properties", properties)
             .put("required", JSONArray().put("command_type"))
         val declaration = JSONObject()
             .put("name", "execute_desktop_command")
-            .put("description", "Execute a Windows desktop action, autonomous coding task for project, Android build/test verification, system status check, Notion notes management, or macros.")
+            .put("description", "Execute a Windows desktop action, system status check, or macro.")
             .put("parameters", schema)
         return JSONArray().put(JSONObject().put("functionDeclarations", JSONArray().put(declaration)))
     }

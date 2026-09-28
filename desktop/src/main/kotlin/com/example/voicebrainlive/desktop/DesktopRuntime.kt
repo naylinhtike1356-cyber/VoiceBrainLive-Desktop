@@ -11,10 +11,8 @@ import com.example.voicebrainlive.desktop.platform.WindowsAudioEngine
 import com.example.voicebrainlive.desktop.platform.WindowsCommandExecutor
 import com.example.voicebrainlive.desktop.platform.SoundEffects
 import com.example.voicebrainlive.desktop.platform.WindowsTrayManager
-import com.example.voicebrainlive.desktop.platform.NotionClient
 import com.example.voicebrainlive.desktop.core.UserMemoryStore
 import com.example.voicebrainlive.desktop.core.ProfileManager
-import com.example.voicebrainlive.desktop.core.MacroManager
 import com.example.voicebrainlive.desktop.core.VoiceRoutineEngine
 import com.example.voicebrainlive.desktop.core.OfflineCommandMatcher
 import com.example.voicebrainlive.desktop.core.AutonomousGoalEngine
@@ -56,7 +54,6 @@ class DesktopRuntime(
     val userMemoryStore = UserMemoryStore()
     val profileManager = ProfileManager()
     val routineEngine = VoiceRoutineEngine(commandExecutor)
-    val macroManager = MacroManager(commandExecutor)
     val offlineEngine = HybridOfflineFallbackEngine(commandExecutor)
     val powerOptimizer = LowPowerOptimizer(
         onThrottleStateChanged = { mode ->
@@ -87,7 +84,6 @@ class DesktopRuntime(
     val compoundCommandHandler = CompoundCommandHandler(commandExecutor)
     val planDecomposer = PlanDecomposer(compoundCommandHandler)
     val goalEngine = AutonomousGoalEngine(commandExecutor, planDecomposer)
-    private var notionClient = NotionClient(apiKeyStore.loadNotionToken(), apiKeyStore.loadNotionParentPageId())
     private var listening = false
     private var liveConversationMode = false
     @Volatile private var reconnectInProgress = false
@@ -185,13 +181,12 @@ class DesktopRuntime(
             
             $memoryContext
             
-            WINDOWS AUTOMATION, TECH EXPERT & NOTION INTEGRATION:
-            - You may call execute_desktop_command for Windows actions and Notion workspace management:
-            - open_app, close_app, search_web, search_youtube, search_files, find_file, open_file, open_url, open_folder, open_downloads, open_documents, open_desktop, open_recycle_bin, empty_recycle_bin, get_current_time, get_current_date, open_settings, open_network_settings, open_bluetooth_settings, open_display_settings, open_sound_settings, take_screenshot, volume_up, volume_down, mute, lock_computer, shutdown, restart, sleep, system_status, get_system_info, diagnose_network, get_battery_status, list_running_apps, copy_to_clipboard, run_powershell_safe, refresh_file_index, get_active_window, solve_project_issue, auto_heal_project, launch_coding_agent, run_android_build_test, verify_app_on_emulator, git_commit_fix, check_adb_devices.
-            - Notion Integration: notion_test, notion_search, notion_get_page_content, notion_create_page, notion_add_note, notion_create_task, notion_append_note, notion_append_to_page, notion_update_page_title, notion_archive_page, notion_delete_page, notion_delete_block, open_notion_page.
+            WINDOWS AUTOMATION & TECH EXPERT:
+            - You may call execute_desktop_command for Windows actions:
+            - open_app, close_app, search_web, search_youtube, search_files, find_file, open_file, open_url, open_folder, open_downloads, open_documents, open_desktop, open_recycle_bin, empty_recycle_bin, get_current_time, get_current_date, open_settings, open_network_settings, open_bluetooth_settings, open_display_settings, open_sound_settings, take_screenshot, volume_up, volume_down, mute, lock_computer, shutdown, restart, sleep, system_status, get_system_info, diagnose_network, get_battery_status, list_running_apps, copy_to_clipboard, run_powershell_safe, refresh_file_index, get_active_window.
             - Agentic memory & routines: get_active_window, remember_user_fact, get_user_memory, run_voice_routine, run_work_macro, show_neural_brain, switch_user_profile, analyze_screen, read_clipboard, media_play_pause, media_next, media_prev, minimize_all, maximize_window, minimize_window, close_window, close_tab, brightness_up, brightness_down.
             - Autonomous Goal Execution & Multi-Step Workflows (ပန်းတိုင်ရောက်သည်အထိ တဆင့်ချင်း ဆောင်ရွက်ခြင်း):
-              * execute_goal: When user asks to achieve an objective that requires multiple sequential steps (e.g., "ဖုန်းကို wireless ချိတ်ပြီး build စစ်ပေးပါ", "auto-heal project", "workspace ပြင်ပေးပါ"), call execute_goal with target = user intention / goal name, value = optional project name.
+              * execute_goal: When user asks to achieve an objective that requires multiple sequential steps (e.g., "အလုပ်စဖို့ ပြင်ဆင်ပေးပါ", "စက်ကို သန့်ရှင်းရေးလုပ်ပေးပါ"), call execute_goal with target = user intention / goal name, value = optional project name.
               * chain_commands: When user gives multiple sequential actions in one sentence (e.g., "A ဖွင့်ပြီး B စစ်ပေးပါ"), call chain_commands with target = raw sentence or command list.
               * cancel_goal: When user says stop/cancel ongoing goal execution.
             - When user commands an action, execute the appropriate tool IMMEDIATELY and reply concisely with the action outcome in Burmese audio.
@@ -326,10 +321,6 @@ class DesktopRuntime(
         connectGemini()
     }
 
-    fun storedNotionToken(): String = apiKeyStore.loadNotionToken()
-
-    fun storedNotionParentPageId(): String = apiKeyStore.loadNotionParentPageId()
-
     fun storedRobotVisible(): Boolean = robotVisible
 
     fun robotAlwaysOnTop(): Boolean = apiKeyStore.loadRobotAlwaysOnTop()
@@ -432,52 +423,6 @@ class DesktopRuntime(
         setRobotVisible(!robotVisible)
     }
 
-    fun saveNotionSettings(token: String, parentPageId: String) {
-        apiKeyStore.saveNotionToken(token)
-        apiKeyStore.saveNotionParentPageId(parentPageId)
-        notionClient = NotionClient(apiKeyStore.loadNotionToken(), apiKeyStore.loadNotionParentPageId())
-        controller.updateStatus("Notion settings သိမ်းပြီးပါပြီ။")
-    }
-
-    fun testNotionConnection(): CommandResult = notionClient.testConnection()
-
-    fun openConnectedNotionPage(): CommandResult {
-        val rawId = storedNotionParentPageId().trim()
-        val cleanId = rawId.replace("-", "")
-        val url = if (cleanId.isNotBlank()) "https://notion.so/$cleanId" else "https://notion.so"
-        val res = notionClient.openPage(url)
-        controller.recordAction("open_notion_page", res)
-        return res
-    }
-
-    fun syncCodingTaskToNotion(
-        projectName: String,
-        taskDescription: String,
-        status: String,
-        branch: String? = null,
-        details: String? = null
-    ): CommandResult {
-        if (!notionClient.isConfigured()) {
-            return CommandResult(false, "Notion token မထည့်ရသေးပါ။")
-        }
-        val title = "⚡ Auto-Coding: $projectName ($status)"
-        val dateStr = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date())
-        val content = buildString {
-            appendLine("• **Project**: $projectName")
-            appendLine("• **Status**: $status")
-            if (!branch.isNullOrBlank()) appendLine("• **Branch**: $branch")
-            appendLine("• **Timestamp**: $dateStr")
-            appendLine("• **Task Description**:")
-            appendLine(taskDescription.trim())
-            if (!details.isNullOrBlank()) {
-                appendLine()
-                appendLine("• **Execution Summary / Logs**:")
-                appendLine(details.take(1500))
-            }
-        }
-        return notionClient.createPage(title, content)
-    }
-
     private suspend fun executeDesktopCommand(command: DesktopCommand): CommandResult {
         val targetVal = command.target ?: command.value.orEmpty()
         return when (command.type.lowercase()) {
@@ -552,79 +497,6 @@ class DesktopRuntime(
                     }
                     CommandResult(true, "Clipboard စာသားကို Gemini သို့ ပို့ပေးလိုက်ပါပြီရှင်။")
                 }
-            }
-            // Notion Workspace & Notes Actions
-            "notion_test", "notion_check_connection" -> {
-                notionClient.testConnection()
-            }
-            "notion_search", "search_notion" -> {
-                notionClient.search(targetVal)
-            }
-            "notion_get_page_content", "notion_read_page", "notion_read_note", "read_notion_page" -> {
-                notionClient.getPageContent(command.target ?: command.value.orEmpty())
-            }
-            "notion_create_page", "notion_add_note", "notion_write_note" -> {
-                val title = command.target ?: "Untitled Note"
-                val content = command.value.orEmpty()
-                notionClient.createPage(title, content)
-            }
-            "notion_create_task", "notion_add_task" -> {
-                val title = command.target ?: "Task"
-                val details = command.value.orEmpty()
-                notionClient.createTask(title, details)
-            }
-            "notion_append_note", "notion_append_to_page", "notion_add_text" -> {
-                val pageId = command.target
-                val content = command.value.orEmpty()
-                notionClient.appendToPage(pageId, content)
-            }
-            "notion_update_page_title", "notion_edit_title" -> {
-                val pageId = command.target.orEmpty()
-                val newTitle = command.value.orEmpty()
-                notionClient.updatePageTitle(pageId, newTitle)
-            }
-            "notion_archive_page", "notion_delete_page", "notion_trash_page" -> {
-                val pageId = command.target ?: command.value.orEmpty()
-                notionClient.archivePage(pageId)
-            }
-            "notion_delete_block" -> {
-                val blockId = command.target ?: command.value.orEmpty()
-                notionClient.deleteBlock(blockId)
-            }
-            "open_notion_page", "open_notion_url" -> {
-                notionClient.openPage(targetVal)
-            }
-            "sync_task_to_notion", "notion_sync_task" -> {
-                val projectName = command.target ?: "Project"
-                val details = command.value.orEmpty()
-                syncCodingTaskToNotion(projectName, details, "Completed")
-            }
-            "solve_project_issue", "fix_project_issue", "auto_code_fix" -> {
-                val res = commandExecutor.execute(command)
-                if (notionClient.isConfigured()) {
-                    scope.launch {
-                        syncCodingTaskToNotion(command.target ?: "Project", command.value.orEmpty(), if (res.success) "Fixed" else "Pending", details = res.message)
-                    }
-                }
-                res
-            }
-            "auto_heal_project", "auto_heal", "heal_project" -> {
-                val res = commandExecutor.execute(command)
-                if (notionClient.isConfigured()) {
-                    scope.launch {
-                        syncCodingTaskToNotion(command.target ?: "Project", command.value.orEmpty(), if (res.success) "Auto-Healed" else "Failed", details = res.message)
-                    }
-                }
-                res
-            }
-            "git_commit_fix", "git_auto_commit" -> {
-                val res = commandExecutor.execute(command)
-                if (notionClient.isConfigured()) {
-                    scope.launch {
-                        syncCodingTaskToNotion(command.target ?: "Project", command.value.orEmpty(), "Committed to Git", details = res.message)
-                    }
-                }
-                res
             }
             "optimize_ram", "clean_ram", "trim_memory", "clear_ram" -> {
                 val reclaimed = powerOptimizer.trimMemoryWorkingSet()

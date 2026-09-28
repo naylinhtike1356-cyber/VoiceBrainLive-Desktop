@@ -440,7 +440,7 @@ fun NeuralBrainScreen(
                     },
                     onRunRoutine = {
                         scope.launch {
-                            val res = runtime.macroManager.executeMacro(item.title)
+                            val res = runtime.routineEngine.executeRoutine(item.title)
                             runtime.assistant.updateResponse(res.message)
                             runtime.assistant.updateStatus(if (res.success) "Routine ပြီးပါပြီ" else "Routine အခက်အခဲ")
                         }

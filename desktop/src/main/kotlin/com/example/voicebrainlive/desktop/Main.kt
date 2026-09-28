@@ -314,10 +314,7 @@ private fun VoiceBrainDesktopApp(
     var apiKey by remember { mutableStateOf(runtime.storedApiKey()) }
     var geminiModel by remember { mutableStateOf(runtime.storedGeminiModel()) }
     var desktopAutomationEnabled by remember { mutableStateOf(runtime.desktopAutomationEnabled()) }
-    var notionToken by remember { mutableStateOf(runtime.storedNotionToken()) }
-    var notionParentPageId by remember { mutableStateOf(runtime.storedNotionParentPageId()) }
     var showApiKey by remember { mutableStateOf(false) }
-    var showNotionToken by remember { mutableStateOf(false) }
     var showNeuralBrain by remember { mutableStateOf(false) }
     var selectedCommandIndex by remember { mutableStateOf(0) }
     val state by runtime.assistant.state.collectAsState()
@@ -346,20 +343,9 @@ private fun VoiceBrainDesktopApp(
         "🧠 Neural Brain" to "ဦးနှောက်မှတ်ဉာဏ် ကြည့်မယ်",
         "⚡ Work Mode" to "အလုပ်စမယ်",
         "☕ Rest Mode" to "အနားယူမယ်",
-        "🎯 Auto-Deploy Goal" to "Android ဖုန်းကို wireless ချိတ်ပြီး VoiceBrainLive-Desktop ကို build စစ်ပေး၊ Notion မှာ task update ပေးပါ",
         "🎯 Workspace Setup" to "work mode ဖွင့်ပေးပါ",
-        "⚡ Auto-Fix Issue" to "VoiceBrainLive ပရောဂျက်မှာ bug ရှာပြင်ပေးပါ",
-        "🔄 Auto-Heal Project" to "VoiceBrainLive project ကို self heal လုပ်ပြီး compile စမ်းပေးပါ",
-        "📱 Run on Emulator" to "VoiceBrainLive app ကို emulator ပေါ်တင်ပြီး crash စစ်ပေးပါ",
-        "🌿 Git Commit Fix" to "VoiceBrainLive ပြင်ဆင်ထားတာတွေကို git commit ထိုးပေးပါ",
-        "🔨 Gradle Build Check" to "VoiceBrainLive-Desktop ပရောဂျက်ကို build စမ်းပေးပါ",
-        "📓 Notion Task Sync" to "Notion ထဲမှာ Coding Task အသစ် sync လုပ်ပေးပါ",
-        "📝 Notion Search" to "Notion ထဲမှာ မှတ်တမ်းတွေ ရှာပေးပါ",
         "💻 System Health" to "ကွန်ပျူတာ အခြေအနေ စစ်ဆေးပေးပါ",
         "🖥️ Active Window" to "လက်ရှိ ဘာ app သုံးနေလဲ စစ်ပေးပါ",
-        "🌿 Multi-Repo" to "Git Repositories အားလုံး စစ်ပေးပါ",
-        "📶 Wireless ADB" to "Wireless ADB devices စစ်ပေးပါ",
-        "🛠️ IDE Status" to "IDE / Editor အခြေအနေ စစ်ပေးပါ",
         "🌐 Network Check" to "အင်တာနက် ချိတ်ဆက်မှု စစ်ပေးပါ",
         "🔋 Battery Status" to "ဘက်ထရီ အခြေအနေ စစ်ပေးပါ",
         "🖼️ Screen Read" to "စခရင်မှာဘာပြလဲ",
@@ -397,24 +383,17 @@ private fun VoiceBrainDesktopApp(
                     showApiKey = showApiKey,
                     geminiModel = geminiModel,
                     desktopAutomationEnabled = desktopAutomationEnabled,
-                    notionToken = notionToken,
-                    notionParentPageId = notionParentPageId,
-                    showNotionToken = showNotionToken,
                     robotVisible = robotVisible,
                     status = state.status,
                     onApiKeyChange = { apiKey = it },
                     onGeminiModelChange = { geminiModel = it },
                     onDesktopAutomationChange = { desktopAutomationEnabled = it },
-                    onNotionTokenChange = { notionToken = it },
-                    onNotionParentPageChange = { notionParentPageId = it },
                     onToggleVisibility = { showApiKey = !showApiKey },
-                    onToggleNotionVisibility = { showNotionToken = !showNotionToken },
                     onRobotVisibilityChange = onRobotVisibilityChange,
                     onSave = {
                         runtime.saveApiKey(apiKey)
                         runtime.saveGeminiModel(geminiModel)
                         runtime.saveDesktopAutomationEnabled(desktopAutomationEnabled)
-                        runtime.saveNotionSettings(notionToken, notionParentPageId)
                         showSettings = false
                     },
                     onClear = {
@@ -426,13 +405,6 @@ private fun VoiceBrainDesktopApp(
                             val result = runtime.testGeminiKey(apiKey)
                             runtime.assistant.updateResponse(result.getOrElse { it.message ?: "Gemini test failed" })
                             runtime.assistant.updateStatus(if (result.isSuccess) "Gemini active" else "Gemini error")
-                        }
-                    },
-                    onTestNotion = {
-                        scope.launch {
-                            val result = runtime.testNotionConnection()
-                            runtime.assistant.updateResponse(result.message)
-                            runtime.assistant.updateStatus(if (result.success) "Notion connected" else "Notion failed")
                         }
                     },
                     onBack = { showSettings = false },
@@ -514,22 +486,6 @@ private fun VoiceBrainDesktopApp(
                                 }
                             }
 
-                            // Notion Hub Button
-                            Surface(
-                                color = CardSoft,
-                                shape = RoundedCornerShape(10.dp),
-                                border = androidx.compose.foundation.BorderStroke(1.dp, BorderGlow),
-                                modifier = Modifier
-                                    .size(36.dp)
-                                    .clickable {
-                                        val result = runtime.openConnectedNotionPage()
-                                        runtime.assistant.updateResponse(result.message)
-                                    }
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Text("📓", fontSize = 16.sp)
-                                }
-                            }
 
                             StatusPill(state.status, state.isConnected, state.isListening, state.phase)
 
@@ -730,16 +686,6 @@ private fun VoiceBrainDesktopApp(
                             }
                         }
 
-                        Surface(
-                            color = CardSoft,
-                            shape = RoundedCornerShape(8.dp),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, BorderGlow),
-                            modifier = Modifier.clickable { send("Notion ထဲမှာ Coding Task အသစ် sync လုပ်ပေးပါ") }
-                        ) {
-                            Row(modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                                Text("📓 Notion Sync", color = TextMain, fontSize = 11.sp, fontWeight = FontWeight.Medium)
-                            }
-                        }
                     }
 
                     // Quick Command Carousel
@@ -1166,23 +1112,16 @@ private fun SettingsPanel(
     showApiKey: Boolean,
     geminiModel: String,
     desktopAutomationEnabled: Boolean,
-    notionToken: String,
-    notionParentPageId: String,
-    showNotionToken: Boolean,
     robotVisible: Boolean,
     status: String,
     onApiKeyChange: (String) -> Unit,
     onGeminiModelChange: (String) -> Unit,
     onDesktopAutomationChange: (Boolean) -> Unit,
-    onNotionTokenChange: (String) -> Unit,
-    onNotionParentPageChange: (String) -> Unit,
     onToggleVisibility: () -> Unit,
-    onToggleNotionVisibility: () -> Unit,
     onRobotVisibilityChange: (Boolean) -> Unit,
     onTestGeminiKey: () -> Unit,
     onSave: () -> Unit,
     onClear: () -> Unit,
-    onTestNotion: () -> Unit,
     onBack: () -> Unit,
     onMinimizeToBackground: () -> Unit = {},
     onExitApp: () -> Unit = {},
@@ -1336,40 +1275,6 @@ private fun SettingsPanel(
                             Text(desc, color = TextMain, fontSize = 11.sp)
                         }
                     }
-                }
-            }
-        }
-
-        // Notion Integration Card
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = CardBg),
-            shape = RoundedCornerShape(12.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, BorderColor),
-        ) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Notion Workspace", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = TextMain)
-                OutlinedTextField(
-                    value = notionToken,
-                    onValueChange = onNotionTokenChange,
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    label = { Text("Token") },
-                    visualTransformation = if (showNotionToken) VisualTransformation.None else PasswordVisualTransformation(),
-                    shape = RoundedCornerShape(8.dp),
-                )
-                OutlinedTextField(
-                    value = notionParentPageId,
-                    onValueChange = onNotionParentPageChange,
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    label = { Text("Database / Page ID") },
-                    shape = RoundedCornerShape(8.dp),
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = onToggleNotionVisibility, shape = RoundedCornerShape(8.dp)) { Text(if (showNotionToken) "Hide" else "Show") }
-                    OutlinedButton(onClick = onTestNotion, shape = RoundedCornerShape(8.dp)) { Text("Test") }
-                    Button(onClick = onSave, colors = ButtonDefaults.buttonColors(containerColor = AccentMint, contentColor = Color.Black), shape = RoundedCornerShape(8.dp)) { Text("Save") }
                 }
             }
         }

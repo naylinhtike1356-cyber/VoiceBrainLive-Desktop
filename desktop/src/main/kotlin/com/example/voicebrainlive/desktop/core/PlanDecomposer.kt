@@ -24,65 +24,6 @@ class PlanDecomposer(
 
         // 2. Specialized Templates for common high-impact workflows
         when {
-            // Android Wireless Deploy & Test
-            (lower.contains("wireless") || lower.contains("ကြိုးမဲ့") || lower.contains("ဖုန်း")) &&
-            (lower.contains("build") || lower.contains("deploy") || lower.contains("စစ်")) -> {
-                val proj = optionalProject ?: extractProjectName(trimmed) ?: "VoiceBrainLive-Desktop"
-                return GoalDefinition(
-                    title = "Android ကြိုးမဲ့စနစ်ဖြင့် Build & Deploy စစ်ဆေးခြင်း",
-                    rawIntent = trimmed,
-                    steps = listOf(
-                        GoalStep(
-                            index = 1,
-                            title = "ကြိုးမဲ့ ADB နှင့် ချိတ်ဆက်ထားသော Devices စစ်ဆေးခြင်း",
-                            command = DesktopCommand("check_adb_devices")
-                        ),
-                        GoalStep(
-                            index = 2,
-                            title = "Project '$proj' Build & Tests များ အတည်ပြုစစ်ဆေးခြင်း",
-                            command = DesktopCommand("run_android_build_test", target = proj)
-                        ),
-                        GoalStep(
-                            index = 3,
-                            title = "Notion တွင် Deploy အခြေအနေ အလိုအလျောက် မှတ်တမ်းတင်ခြင်း",
-                            command = DesktopCommand("sync_task_to_notion", target = proj, value = "Build & Deploy Verified")
-                        )
-                    )
-                )
-            }
-
-            // Auto-Healing & Git Commit
-            (lower.contains("auto heal") || lower.contains("auto-heal") || lower.contains("ပြင်") || lower.contains("fix")) &&
-            (lower.contains("project") || lower.contains("error") || lower.contains("issue")) -> {
-                val proj = optionalProject ?: extractProjectName(trimmed) ?: "VoiceBrainLive-Desktop"
-                return GoalDefinition(
-                    title = "Project Issue အား Auto-Healing ပြုလုပ်ပြီး Git Commit ထိုးခြင်း",
-                    rawIntent = trimmed,
-                    steps = listOf(
-                        GoalStep(
-                            index = 1,
-                            title = "Active Window & Project Context စစ်ဆေးခြင်း",
-                            command = DesktopCommand("get_active_window")
-                        ),
-                        GoalStep(
-                            index = 2,
-                            title = "Project '$proj' အား Auto-Healing ဖြင့် အလိုအလျောက် ပြင်ဆင်ခြင်း",
-                            command = DesktopCommand("auto_heal_project", target = proj, value = trimmed)
-                        ),
-                        GoalStep(
-                            index = 3,
-                            title = "အောင်မြင်သော ပြင်ဆင်ချက်များကို Git Commit ထိုးခြင်း",
-                            command = DesktopCommand("git_commit_fix", target = proj, value = "Auto-healed project issues")
-                        ),
-                        GoalStep(
-                            index = 4,
-                            title = "Notion Workspace တွင် ပြီးစီးမှု မှတ်တမ်းတင်ခြင်း",
-                            command = DesktopCommand("sync_task_to_notion", target = proj, value = "Auto-Healed & Committed")
-                        )
-                    )
-                )
-            }
-
             // Developer Workspace Setup
             (lower.contains("work mode") || lower.contains("workspace") || lower.contains("အလုပ်လုပ်")) -> {
                 return GoalDefinition(
@@ -96,8 +37,8 @@ class PlanDecomposer(
                         ),
                         GoalStep(
                             index = 2,
-                            title = "Git Repositories အားလုံး၏ Status စစ်ဆေးခြင်း",
-                            command = DesktopCommand("git_repo_status_all")
+                            title = "စနစ် အခြေအနေ စစ်ဆေးခြင်း",
+                            command = DesktopCommand("system_status")
                         ),
                         GoalStep(
                             index = 3,
@@ -183,10 +124,6 @@ class PlanDecomposer(
             "volume_down" -> "အသံလျှော့ခြင်း"
             "mute" -> "အသံပိတ်/ပြန်ဖွင့်ခြင်း"
             "take_screenshot" -> "စခရင် ပုံရိပ် ရယူခြင်း"
-            "run_android_build_test" -> "Android Project '${cmd.target ?: ""}' Build & Test စစ်ဆေးခြင်း"
-            "check_adb_devices" -> "ADB Devices စစ်ဆေးခြင်း"
-            "git_repo_status_all" -> "Git Repositories အားလုံး စစ်ဆေးခြင်း"
-            "sync_task_to_notion" -> "Notion Task တွင် မှတ်တမ်းတင်ခြင်း"
             else -> "အဆင့် $stepNum: ${cmd.type} (${cmd.target ?: ""})"
         }
     }

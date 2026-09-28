@@ -159,21 +159,6 @@ class VoiceRoutineEngine(
                 responseBurmese = "အနားယူချိန် ဖြစ်သည့်အတွက် မျက်နှာပြင်များကို သိမ်းဆည်းပေးပြီး စိတ်လက်အပန်းဖြေရန် Lofi သီချင်း ဖွင့်ပေးထားပါသည်ရှင်။"
             )
         )
-
-        // 5. Dev Inspect Mode
-        routines.add(
-            VoiceRoutine(
-                id = "routine_dev_inspect",
-                name = "Dev Inspect (ပရောဂျက်စစ်မယ်)",
-                triggerPhrases = listOf("ပရောဂျက်စစ်မယ်", "project စစ်မယ်", "dev inspect", "git status စစ်"),
-                description = "Inspect git repo status and connected ADB devices",
-                actions = listOf(
-                    DesktopCommand("git_status", null, null),
-                    DesktopCommand("adb_devices", null, null)
-                ),
-                responseBurmese = "Project Development စစ်ဆေးချက်များ (Git Status နှင့် ချိတ်ဆက်ထားသော ဖုန်းများ) ကို ရယူဖော်ပြပေးလိုက်ပါပြီရှင်။"
-            )
-        )
     }
 
     @Synchronized

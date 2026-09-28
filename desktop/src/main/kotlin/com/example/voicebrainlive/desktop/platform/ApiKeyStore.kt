@@ -58,38 +58,6 @@ class ApiKeyStore {
         remove(KEY_GEMINI)
     }
 
-    fun loadNotionToken(): String {
-        val stored = preferences.get(KEY_NOTION_TOKEN, "").trim()
-        if (stored.isNotBlank()) return stored
-        val fromProp = readPropertyFromFiles("NOTION_TOKEN")
-        if (fromProp.isNotBlank()) return fromProp
-        return System.getenv("NOTION_TOKEN")?.trim().orEmpty()
-    }
-
-    fun hasNotionCredentials(): Boolean =
-        loadNotionToken().isNotBlank() && loadNotionParentPageId().isNotBlank()
-
-    fun saveNotionToken(value: String) {
-        saveValue(KEY_NOTION_TOKEN, value)
-    }
-
-    fun loadNotionParentPageId(): String {
-        val stored = preferences.get(KEY_NOTION_PARENT_PAGE, "").trim()
-        if (stored.isNotBlank()) return stored
-        val fromProp = readPropertyFromFiles("NOTION_PARENT_PAGE_ID")
-        if (fromProp.isNotBlank()) return fromProp
-        return System.getenv("NOTION_PARENT_PAGE_ID")?.trim().orEmpty()
-    }
-
-    fun saveNotionParentPageId(value: String) {
-        saveValue(KEY_NOTION_PARENT_PAGE, value)
-    }
-
-    fun clearNotion() {
-        remove(KEY_NOTION_TOKEN)
-        remove(KEY_NOTION_PARENT_PAGE)
-    }
-
     fun loadRobotVisible(): Boolean = preferences.getBoolean(KEY_ROBOT_VISIBLE, true)
 
     fun saveRobotVisible(value: Boolean) {
@@ -170,8 +138,6 @@ class ApiKeyStore {
         private const val PREFERENCES_NODE = "VoiceBrainLive"
         private const val KEY_GEMINI = "gemini_api_key"
         private const val KEY_GEMINI_MODEL = "gemini_model"
-        private const val KEY_NOTION_TOKEN = "notion_token"
-        private const val KEY_NOTION_PARENT_PAGE = "notion_parent_page_id"
         private const val KEY_ROBOT_VISIBLE = "robot_visible"
         private const val KEY_DESKTOP_AUTOMATION_ENABLED = "desktop_automation_enabled"
         private const val KEY_ROBOT_ALWAYS_ON_TOP = "robot_always_on_top"

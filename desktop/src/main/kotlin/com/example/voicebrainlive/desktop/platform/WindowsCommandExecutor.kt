@@ -4,16 +4,6 @@ import com.example.voicebrainlive.desktop.core.CommandResult
 import com.example.voicebrainlive.desktop.core.DesktopCommand
 import com.example.voicebrainlive.desktop.core.PlatformCommandExecutor
 import com.example.voicebrainlive.desktop.core.PowerShellQueryPolicy
-import com.example.voicebrainlive.desktop.automation.AndroidBuildPipeline
-import com.example.voicebrainlive.desktop.automation.AndroidEmulatorRunner
-import com.example.voicebrainlive.desktop.automation.AntigravityBridge
-import com.example.voicebrainlive.desktop.automation.AutoHealingFixEngine
-import com.example.voicebrainlive.desktop.automation.CodingTaskFormatter
-import com.example.voicebrainlive.desktop.automation.GitAutomationService
-import com.example.voicebrainlive.desktop.automation.IdeBridgeService
-import com.example.voicebrainlive.desktop.automation.MultiRepoManager
-import com.example.voicebrainlive.desktop.automation.ProjectResolver
-import com.example.voicebrainlive.desktop.automation.WirelessAdbManager
 import java.awt.Desktop
 import java.awt.Rectangle
 import java.awt.Robot
@@ -138,17 +128,7 @@ class WindowsCommandExecutor : PlatformCommandExecutor {
         "gemini" to AppSpec("Gemini", "https://gemini.google.com"),
     )
 
-    private val projectResolver = ProjectResolver()
-    private val taskFormatter = CodingTaskFormatter()
-    private val antigravityBridge = AntigravityBridge()
-    private val androidPipeline = AndroidBuildPipeline()
-    private val autoHealingFixEngine = AutoHealingFixEngine(androidPipeline, taskFormatter, antigravityBridge)
-    private val androidEmulatorRunner = AndroidEmulatorRunner()
-    private val gitAutomationService = GitAutomationService()
     val activeWindowTracker = ActiveWindowTracker()
-    val ideBridgeService = IdeBridgeService(projectResolver)
-    val wirelessAdbManager = WirelessAdbManager()
-    val multiRepoManager = MultiRepoManager(projectResolver)
     val osHands = OSHandsController()
     val visionEyes = VisionEyesEngine()
 
@@ -162,15 +142,6 @@ class WindowsCommandExecutor : PlatformCommandExecutor {
                 "mouse_move" -> handleMouseMove(command.target, command.value)
                 "show_desktop" -> osHands.pressKeyCombo("win+d")
                 "get_active_window", "active_window_context", "active_app", "what_am_i_doing" -> getActiveWindowSummary()
-                "ide_open_file", "open_file_in_editor", "open_in_ide" -> openFileInIde(command.target ?: command.value.orEmpty(), command.value)
-                "ide_status", "check_ide_status" -> getIdeStatusSummary()
-                "adb_enable_tcpip", "wireless_adb_enable" -> enableWirelessAdb(command.value)
-                "adb_connect_wireless", "wireless_adb_connect" -> connectWirelessAdb(command.target ?: command.value.orEmpty())
-                "adb_pair_wireless", "wireless_adb_pair" -> pairWirelessAdb(command.target.orEmpty(), command.value.orEmpty())
-                "adb_devices_detailed", "check_adb_devices", "adb_devices" -> getAdbDevicesSummary()
-                "git_repo_status_all", "git_multi_repo_status", "list_all_repos", "list_repos" -> getMultiRepoSummary()
-                "git_switch_branch", "git_checkout" -> switchRepoBranch(command.target.orEmpty(), command.value.orEmpty())
-                "git_pull_repo", "git_sync_repo" -> pullRepoChanges(command.target ?: command.value.orEmpty())
                 "open_app", "launch_app" -> openApp(command.target ?: command.value.orEmpty())
                 "close_app", "stop_app" -> closeApp(command.target ?: command.value.orEmpty())
                 "open_url" -> openUrl(command.target ?: command.value.orEmpty())
@@ -222,13 +193,6 @@ class WindowsCommandExecutor : PlatformCommandExecutor {
                 "list_running_apps", "running_processes", "list_apps" -> listRunningApps()
                 "copy_to_clipboard", "set_clipboard" -> copyToClipboard(command.target ?: command.value.orEmpty())
                 "run_powershell_safe", "powershell_query" -> runPowerShellSafe(command.target ?: command.value.orEmpty())
-                "solve_project_issue", "fix_project_issue", "auto_code_fix" -> solveProjectIssue(command.target.orEmpty(), command.value.orEmpty())
-                "auto_heal_project", "auto_heal", "heal_project" -> autoHealProject(command.target.orEmpty(), command.value.orEmpty())
-                "launch_coding_agent", "open_project_workspace", "open_project" -> openProjectWorkspace(command.target ?: command.value.orEmpty())
-                "run_android_build_test", "verify_android_project", "build_android_app" -> runAndroidBuildTest(command.target.orEmpty(), command.value)
-                "verify_app_on_emulator", "run_emulator_test", "deploy_to_emulator" -> verifyOnEmulator(command.target.orEmpty())
-                "git_commit_fix", "git_auto_commit", "git_commit" -> gitCommitFix(command.target.orEmpty(), command.value.orEmpty())
-                "check_adb_devices", "adb_devices" -> checkAdbDevices()
                 "cancel_shutdown", "cancel_power" -> cancelShutdown()
                 "shutdown", "restart", "sleep" -> powerAction(command.type.lowercase())
                 else -> CommandResult(false, "ဒီ Windows command ကို မထည့်ရသေးပါ: ${command.type}")
@@ -855,149 +819,9 @@ class WindowsCommandExecutor : PlatformCommandExecutor {
 
     private fun normalize(text: String): String = text.trim().lowercase().replace(Regex("[^a-z0-9\\s]"), "")
 
-    private fun solveProjectIssue(projectNameQuery: String, issueDescription: String): CommandResult {
-        if (projectNameQuery.isBlank()) {
-            return CommandResult(false, "Project အမည် သတ်မှတ်ပေးရန် လိုအပ်ပါသည်။")
-        }
-        val projectDir = projectResolver.resolveProjectDirectory(projectNameQuery)
-        if (projectDir == null) {
-            val available = projectResolver.listProjects().take(5).joinToString(", ") { it.name }
-            return CommandResult(false, "'$projectNameQuery' ပရောဂျက်ကို ရှာမတွေ့ပါ။ စက်ထဲရှိ ပရောဂျက်များ: $available")
-        }
-
-        // 1. Format Structured Technical Prompt
-        val prompt = taskFormatter.formatTaskPrompt(projectDir.name, projectDir, issueDescription)
-
-        // 2. Dispatch Task to Workspace
-        val taskFile = antigravityBridge.dispatchTaskToWorkspace(projectDir, prompt)
-
-        // 3. Open Workspace in Editor/Antigravity
-        val editorResult = antigravityBridge.openProjectInEditor(projectDir)
-
-        // 4. Run Build/Test Verification
-        val buildResult = androidPipeline.runGradleCheck(projectDir, listOf("compileKotlin", "test"))
-
-        val statusSummary = if (buildResult.success) {
-            "ပရောဂျက် '${projectDir.name}' အတွက် Task ကို Antigravity/Editor တွင် ဖွင့်လှစ်ပြီး Gradle build/test စစ်ဆေးမှု အောင်မြင်ပါသည် (Pass)။\nအသေးစိတ်: ${taskFile.name} တွင် မှတ်တမ်းတင်ထားပါသည်။"
-        } else {
-            "ပရောဂျက် '${projectDir.name}' ကို Antigravity/Editor တွင် ဖွင့်လှစ်ပြီး Task ပေးပို့ထားပါသည်။ လက်ရှိ Build စစ်ဆေးမှု ရလဒ်:\n${buildResult.message}"
-        }
-
-        return CommandResult(buildResult.success, statusSummary)
-    }
-
-    private fun openProjectWorkspace(projectNameQuery: String): CommandResult {
-        if (projectNameQuery.isBlank()) return CommandResult(false, "Project အမည် လိုအပ်ပါသည်။")
-        val projectDir = projectResolver.resolveProjectDirectory(projectNameQuery)
-            ?: return CommandResult(false, "'$projectNameQuery' ပရောဂျက်ကို ရှာမတွေ့ပါ။")
-        val res = antigravityBridge.openProjectInEditor(projectDir)
-        return CommandResult(res.success, res.message)
-    }
-
-    private fun runAndroidBuildTest(projectNameQuery: String, tasksStr: String?): CommandResult {
-        val projectDir = if (projectNameQuery.isBlank()) {
-            File(System.getProperty("user.home"), "AndroidStudioProjects\\VoiceBrainLive-Desktop")
-        } else {
-            projectResolver.resolveProjectDirectory(projectNameQuery)
-                ?: return CommandResult(false, "'$projectNameQuery' ပရောဂျက်ကို ရှာမတွေ့ပါ။")
-        }
-        val tasks = if (!tasksStr.isNullOrBlank()) {
-            tasksStr.split(",", " ").map { it.trim() }.filter { it.isNotBlank() }
-        } else {
-            listOf("compileKotlin", "test")
-        }
-        val res = androidPipeline.runGradleCheck(projectDir, tasks)
-        return CommandResult(res.success, res.message)
-    }
-
-    private fun checkAdbDevices(): CommandResult {
-        val res = androidPipeline.checkAdbDevices()
-        return CommandResult(res.success, res.output.ifBlank { res.message })
-    }
-
-    private fun autoHealProject(projectNameQuery: String, issueDescription: String): CommandResult {
-        val projectDir = if (projectNameQuery.isBlank()) {
-            File(System.getProperty("user.home"), "AndroidStudioProjects\\VoiceBrainLive-Desktop")
-        } else {
-            projectResolver.resolveProjectDirectory(projectNameQuery)
-                ?: return CommandResult(false, "'$projectNameQuery' ပရောဂျက်ကို ရှာမတွေ့ပါ။")
-        }
-        val res = autoHealingFixEngine.runAutoHealingCycle(projectDir, issueDescription)
-        return CommandResult(res.success, res.finalStatusReport)
-    }
-
-    private fun verifyOnEmulator(projectNameQuery: String): CommandResult {
-        val projectDir = if (projectNameQuery.isBlank()) {
-            File(System.getProperty("user.home"), "AndroidStudioProjects\\VoiceBrainLive-Desktop")
-        } else {
-            projectResolver.resolveProjectDirectory(projectNameQuery)
-                ?: return CommandResult(false, "'$projectNameQuery' ပရောဂျက်ကို ရှာမတွေ့ပါ။")
-        }
-        val res = androidEmulatorRunner.deployAndVerifyApp(projectDir)
-        return CommandResult(res.success, res.message)
-    }
-
-    private fun gitCommitFix(projectNameQuery: String, commitMessage: String): CommandResult {
-        val projectDir = if (projectNameQuery.isBlank()) {
-            File(System.getProperty("user.home"), "AndroidStudioProjects\\VoiceBrainLive-Desktop")
-        } else {
-            projectResolver.resolveProjectDirectory(projectNameQuery)
-                ?: return CommandResult(false, "'$projectNameQuery' ပရောဂျက်ကို ရှာမတွေ့ပါ။")
-        }
-        val res = gitAutomationService.createBranchAndCommit(projectDir, commitMessage)
-        return CommandResult(res.success, "${res.message}\n${res.diffSummary}".trim())
-    }
-
     private fun getActiveWindowSummary(): CommandResult {
         val info = activeWindowTracker.getActiveWindow()
         return CommandResult(true, info.toBurmeseSummary())
     }
 
-    private fun openFileInIde(filePath: String, lineNumberStr: String?): CommandResult {
-        val line = lineNumberStr?.toIntOrNull() ?: 1
-        val res = ideBridgeService.openFileInEditor(filePath, line)
-        return CommandResult(res.success, res.message)
-    }
-
-    private fun getIdeStatusSummary(): CommandResult {
-        val activeWindow = activeWindowTracker.getActiveWindow()
-        val status = ideBridgeService.getIdeStatus(activeWindow.processName, activeWindow.windowTitle)
-        return CommandResult(true, status.toBurmeseSummary())
-    }
-
-    private fun enableWirelessAdb(portStr: String?): CommandResult {
-        val port = portStr?.toIntOrNull() ?: 5555
-        val res = wirelessAdbManager.enableTcpip(port)
-        return CommandResult(res.success, res.message)
-    }
-
-    private fun connectWirelessAdb(ipAndPort: String): CommandResult {
-        val res = wirelessAdbManager.connectWireless(ipAndPort)
-        return CommandResult(res.success, res.message)
-    }
-
-    private fun pairWirelessAdb(ipAndPort: String, code: String): CommandResult {
-        val res = wirelessAdbManager.pairWireless(ipAndPort, code)
-        return CommandResult(res.success, res.message)
-    }
-
-    private fun getAdbDevicesSummary(): CommandResult {
-        val summary = wirelessAdbManager.formatDevicesSummary()
-        return CommandResult(true, summary)
-    }
-
-    private fun getMultiRepoSummary(): CommandResult {
-        val report = multiRepoManager.generateMultiRepoReport()
-        return CommandResult(true, report)
-    }
-
-    private fun switchRepoBranch(projectName: String, branch: String): CommandResult {
-        val res = multiRepoManager.switchBranch(projectName, branch)
-        return CommandResult(res.success, res.message)
-    }
-
-    private fun pullRepoChanges(projectName: String): CommandResult {
-        val res = multiRepoManager.pullRepo(projectName)
-        return CommandResult(res.success, res.message)
-    }
 }

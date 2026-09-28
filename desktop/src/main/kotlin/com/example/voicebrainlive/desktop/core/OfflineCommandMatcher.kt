@@ -170,8 +170,6 @@ object OfflineCommandMatcher {
         "အနားယူမယ်" to Triple("run_voice_routine", "Rest Mode (အနားယူမယ်)", null),
         "rest mode" to Triple("run_voice_routine", "Rest Mode (အနားယူမယ်)", null),
         "break time" to Triple("run_voice_routine", "Rest Mode (အနားယူမယ်)", null),
-        "ပရောဂျက်စစ်မယ်" to Triple("run_voice_routine", "Dev Inspect (ပရောဂျက်စစ်မယ်)", null),
-        "project စစ်မယ်" to Triple("run_voice_routine", "Dev Inspect (ပရောဂျက်စစ်မယ်)", null),
         "ဦးနှောက်မှတ်ဉာဏ်" to Triple("show_neural_brain", null, null),
         "neural brain" to Triple("show_neural_brain", null, null),
         "မှတ်ဉာဏ်ပြ" to Triple("show_neural_brain", null, null),
@@ -351,65 +349,6 @@ object OfflineCommandMatcher {
         "google ဖွင့်" to Triple("open_url", "https://google.com", null),
         "tiktok ဖွင့်" to Triple("open_url", "https://tiktok.com", null),
 
-        // Notion Shortcuts
-        "notion စစ်" to Triple("notion_test", null, null),
-        "notion စစ်ပါ" to Triple("notion_test", null, null),
-        "notion ချိတ်ဆက်မှုစစ်" to Triple("notion_test", null, null),
-        "notion check" to Triple("notion_test", null, null),
-        "notion test" to Triple("notion_test", null, null),
-        "notion ဖွင့်" to Triple("open_notion_page", "https://notion.so", null),
-        "notion ဖွင့်ပါ" to Triple("open_notion_page", "https://notion.so", null),
-        "open notion" to Triple("open_notion_page", "https://notion.so", null),
-        "notion ရှာ" to Triple("notion_search", "", null),
-        "notion ဖတ်" to Triple("notion_get_page_content", "", null),
-
-        // Phase 3: Wireless ADB, Developer Superpowers & Multi-Repo Shortcuts
-        "wifi adb ဖွင့်" to Triple("adb_enable_tcpip", null, "5555"),
-        "wireless adb ဖွင့်" to Triple("adb_enable_tcpip", null, "5555"),
-        "wireless adb" to Triple("adb_devices_detailed", null, null),
-        "adb devices" to Triple("adb_devices_detailed", null, null),
-        "android devices" to Triple("adb_devices_detailed", null, null),
-        "ဖုန်းချိတ်ဆက်မှုစစ်" to Triple("adb_devices_detailed", null, null),
-        "ဖုန်းချိတ်ထားတာဘာရှိလဲ" to Triple("adb_devices_detailed", null, null),
-        "ဖုန်းဘက်ထရီ" to Triple("adb_devices_detailed", null, null),
-        "ဖုန်းအခြေအနေ" to Triple("adb_devices_detailed", null, null),
-        "ဖုန်း crash log စစ်" to Triple("adb_logcat_crash", null, null),
-        "crash log စစ်" to Triple("adb_logcat_crash", null, null),
-        "logcat စစ်" to Triple("adb_logcat_crash", null, null),
-        "ဖုန်း error စစ်" to Triple("adb_logcat_crash", null, null),
-        "phone crash log" to Triple("adb_logcat_crash", null, null),
-        "check logcat" to Triple("adb_logcat_crash", null, null),
-        "ဖုန်း စခရင်ရှော့" to Triple("adb_device_screenshot", null, null),
-        "ဖုန်း စခရင်ရှော့ရိုက်" to Triple("adb_device_screenshot", null, null),
-        "ဖုန်း screenshot" to Triple("adb_device_screenshot", null, null),
-        "phone screenshot" to Triple("adb_device_screenshot", null, null),
-        "git status စစ်" to Triple("git_status", null, null),
-        "git status" to Triple("git_status", null, null),
-        "repo status" to Triple("git_status", null, null),
-        "git အခြေအနေ" to Triple("git_status", null, null),
-        "repo အကုန်စစ်" to Triple("git_repo_status_all", null, null),
-        "repo အားလုံးစစ်ပေးပါ" to Triple("git_repo_status_all", null, null),
-        "git repos" to Triple("git_repo_status_all", null, null),
-        "list repos" to Triple("git_repo_status_all", null, null),
-        "ပရောဂျက်တွေ စာရင်းပြပါ" to Triple("git_repo_status_all", null, null),
-        "git pull" to Triple("git_pull_repo", null, null),
-        "git pull လုပ်" to Triple("git_pull_repo", null, null),
-        "git push" to Triple("git_push", null, null),
-        "git push လုပ်" to Triple("git_push", null, null),
-        "ide status" to Triple("ide_status", null, null),
-        "editor အခြေအနေ" to Triple("ide_status", null, null),
-        "vscode ဖွင့်" to Triple("open_in_vscode", null, null),
-        "code ဖွင့်" to Triple("open_in_vscode", null, null),
-        "open in vscode" to Triple("open_in_vscode", null, null),
-        "android studio ဖွင့်" to Triple("open_in_studio", null, null),
-        "open in studio" to Triple("open_in_studio", null, null),
-        "project build လုပ်" to Triple("build_project", null, null),
-        "build စစ်" to Triple("build_project", null, null),
-        "run build" to Triple("build_project", null, null),
-        "build run" to Triple("build_project", null, null),
-        "error ပြင်" to Triple("auto_heal_project", null, null),
-        "auto heal" to Triple("auto_heal_project", null, null),
-        "project ပြင်" to Triple("auto_heal_project", null, null),
 
         // App Shortcuts
         "chrome ဖွင့်" to Triple("open_app", "Chrome", null),
@@ -614,47 +553,12 @@ object OfflineCommandMatcher {
             }
         }
 
-        // 3.6 Phase 3: Dynamic Developer Shortcuts (Wireless ADB, Git, IDE)
-        // A. Dynamic Wireless ADB connect: "wireless adb 192.168.1.100:5555 ချိတ်", "adb connect 192.168.1.50"
-        val ipPortRegex = Regex("(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}(?::\\d{1,5})?)")
-        if ((clean.contains("adb") || clean.contains("ဖုန်း")) && (clean.contains("ချိတ်") || clean.contains("connect"))) {
-            val ipMatch = ipPortRegex.find(clean)
-            if (ipMatch != null) {
-                return DesktopCommand("adb_connect_wireless", ipMatch.groupValues[1], null)
-            }
-        }
-
-        // B. Dynamic Git Commit: "git commit <message>", "commit <message>"
-        if (clean.startsWith("git commit") || clean.startsWith("commit ")) {
-            val msg = clean.removePrefix("git commit").removePrefix("commit").replace("လုပ်ပါ", "").replace("လုပ်", "").trim()
-            if (msg.isNotBlank()) {
-                return DesktopCommand("git_commit", null, msg)
-            }
-        }
-
-        // C. Dynamic Git Checkout / Branch switch: "branch <name> ပြောင်း", "git checkout <name>"
-        val gitCheckoutMatch = Regex("^(?:git\\s+checkout|checkout)\\s+([a-zA-Z0-9_\\-\\./]+)$", RegexOption.IGNORE_CASE).find(clean)
-            ?: Regex("^branch\\s+([a-zA-Z0-9_\\-\\./]+)\\s+ပြောင်း(?:ပါ)?$", RegexOption.IGNORE_CASE).find(clean)
-        if (gitCheckoutMatch != null) {
-            val branch = gitCheckoutMatch.groupValues[1].trim()
-            if (branch.isNotBlank()) {
-                return DesktopCommand("git_switch_branch", null, branch)
-            }
-        }
-
-        // D. Dynamic Open File in Editor: "code မှာ <file> ဖွင့်", "ide တွင် <file> ဖွင့်"
-        if ((clean.contains("code မှာ") || clean.contains("ide မှာ") || clean.contains("ide တွင်") || clean.startsWith("open in code") || clean.startsWith("open file ")) && clean.contains("ဖွင့်")) {
-            val fileCandidate = clean.replace("code မှာ", "").replace("ide မှာ", "").replace("ide တွင်", "").replace("open in code", "").replace("open file", "").replace("ဖွင့်ပေးပါ", "").replace("ဖွင့်ပါ", "").replace("ဖွင့်", "").trim()
-            if (fileCandidate.isNotBlank()) {
-                return DesktopCommand("ide_open_file", fileCandidate, null)
-            }
-        }
 
         // Web Search with Dynamic Query: "google မှာ <query> ရှာပေးပါ", "<query> ရှာပေးပါ", "<query> ရှာပါ"
         val googleSearchRegex = Regex("^(?:google\\s+မှာ\\s+|search\\s+for\\s+|search\\s+)?(.+?)(?:\\s+ရှာပေးပါ|\\s+ရှာပါ|\\s+ကို\\s+ရှာပေးပါ)?$", RegexOption.IGNORE_CASE).find(clean)
         if (clean.contains("ရှာပေးပါ") || clean.contains("ရှာပါ") || clean.startsWith("search ")) {
             var query = clean.replace("google မှာ", "").replace("google", "").replace("ရှာပေးပါ", "").replace("ရှာပါ", "").replace("ကို", "").replace("search", "").trim()
-            if (query.isNotBlank() && !query.contains("notion")) {
+            if (query.isNotBlank()) {
                 if (clean.contains("youtube")) {
                     query = query.replace("youtube မှာ", "").replace("youtube", "").trim()
                     return DesktopCommand("search_youtube", query, null)
@@ -697,7 +601,7 @@ object OfflineCommandMatcher {
         for (verb in burmeseVerbs) {
             if (clean.endsWith(verb)) {
                 val candidate = clean.removeSuffix(verb).trim()
-                if (candidate.isNotBlank() && !candidate.contains("စက်") && !candidate.contains("notion")) {
+                if (candidate.isNotBlank() && !candidate.contains("စက်")) {
                     return DesktopCommand("open_app", candidate, null)
                 }
             }
