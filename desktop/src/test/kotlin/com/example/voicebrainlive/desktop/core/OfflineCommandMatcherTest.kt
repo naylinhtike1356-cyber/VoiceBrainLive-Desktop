@@ -105,4 +105,12 @@ class OfflineCommandMatcherTest {
         assertEquals("click_ui_element", cancelBtn?.type)
         assertEquals("cancel", cancelBtn?.target?.lowercase())
     }
+
+    @Test
+    fun latencyReportTriggerMatches() {
+        assertEquals("latency_report", OfflineCommandMatcher.match("latency စစ်")?.type)
+        assertEquals("latency_report", OfflineCommandMatcher.match("latency စစ်ဆေး")?.type)
+        assertEquals("latency_report", OfflineCommandMatcher.match("အသံ latency စစ်")?.type)
+        assertEquals("latency_report", OfflineCommandMatcher.match("latency check")?.type)
+    }
 }
