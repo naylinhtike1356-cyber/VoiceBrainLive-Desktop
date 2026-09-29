@@ -292,17 +292,19 @@ class WindowsAudioEngine(
                     forwardChunk(decision.frame)
                 }
                 is EchoDecision.Forward -> {
+                    // ALWAYS forward audio upstream — the server's VAD is the
+                    // authority on speech detection. Gating on the client VAD
+                    // caused user speech to be silently dropped when the local
+                    // VAD was too strict (mic level low, accent, background
+                    // noise), which made it look like the server never heard
+                    // the user. Client VAD is still used for barge-in timing
+                    // and UI state via handleSpeechOnset/End below.
                     if (speech) {
                         handleSpeechOnset(bargeIn = false)
-                        forwardChunk(decision.frame)
                     } else {
                         handleSpeechEnd()
-                        // Ambient room noise: do NOT send upstream; keep rolling pre-roll.
-                        preRollBuffer.add(decision.frame)
-                        while (preRollBuffer.size > PRE_ROLL_CHUNKS) {
-                            preRollBuffer.poll()
-                        }
                     }
+                    forwardChunk(decision.frame)
                 }
                 EchoDecision.Suppress -> {
                     // Echo suppressed while the assistant speaks; frame dropped.
