@@ -102,7 +102,8 @@ object NilarType {
 
     val Body = TextStyle(
         fontSize = 13.5.sp,
-        lineHeight = 20.sp,
+        // Burmese script has tall stacked glyphs; 22sp keeps lines airy.
+        lineHeight = 22.sp,
         color = NilarColors.TextMain,
     )
 

@@ -324,6 +324,12 @@ class GeminiLiveSession(
                     // roughly 1–2 minutes of fast speech, well beyond the
                     // 1–2 sentence conversational target in the instructions.
                     put("maxOutputTokens", 300)
+                    // S2S speed: disable the model's internal thinking pass.
+                    // For real-time voice, thinking adds seconds to first
+                    // audio with no conversational benefit at 1–2 sentences.
+                    put("thinkingConfig", JSONObject().apply {
+                        put("thinkingBudget", 0)
+                    })
                     put("speechConfig", JSONObject().apply {
                         put("voiceConfig", JSONObject().apply {
                             put("prebuiltVoiceConfig", JSONObject().apply {
