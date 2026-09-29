@@ -373,6 +373,31 @@ class AudioPipelineTest {
         }
     }
 
+    /**
+     * Echo floor must NEVER drop during a burst. Downward adaptation into
+     * mic noise during speech pauses was leaving the floor too low when the
+     * echo resumed — the self-interruption that appeared after a few minutes.
+     * The floor only moves up; it is re-seeded at the next burst.
+     */
+    @Test
+    fun echoFloorNeverDropsDuringBurst() {
+        val canceller = SuppressionEchoCanceller(isPlaying = { true }, burstStartGuardMs = 0L)
+        val render = loudFrame(0.2f) // floor seeds at 0.2*0.7=0.14
+        val echo = loudFrame(0.1f) // steady echo below the floor
+        // Run many frames: the floor must not sink toward the quieter echo.
+        repeat(50) {
+            val d = canceller.processCapture(echo, render, speechDetected = false)
+            assertTrue("echo must stay suppressed, was $d", d is EchoDecision.Suppress)
+        }
+        // A loud transient at the ORIGINAL echo level must still be gated,
+        // not treated as barge-in (floor didn't drop).
+        val transient = loudFrame(0.3f) // 0.3/0.14 = 2.1x < 4.0x gate
+        repeat(3) {
+            val d = canceller.processCapture(transient, render, speechDetected = true)
+            assertTrue("transient echo must not barge in, was $d", d is EchoDecision.Suppress)
+        }
+    }
+
     /** PCM16 frame with (approximately) the given RMS. */
     private fun loudFrame(rms: Float): ByteArray =
         pcm16(FloatArray(frameSamples) { j ->

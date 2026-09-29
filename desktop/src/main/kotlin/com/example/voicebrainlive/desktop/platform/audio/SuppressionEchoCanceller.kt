@@ -101,16 +101,16 @@ class SuppressionEchoCanceller(
                 echoFloorRms = maxOf(ECHO_FLOOR_INIT, renderRms * PRIOR_COUPLING)
                 floorInitializedForBurst = true
             }
-            // Track the echo level — but only with echo-plausible observations:
-            // at or above the noise floor, and well under any plausible user
-            // voice. Anything louder may be the user; letting it adapt the
-            // floor upward would deafen the barge-in detector, and adapting
-            // downward into mic noise during speech pauses would leave the
-            // floor too low when the echo resumes.
-            if (micRms >= ECHO_FLOOR_INIT && micRms <= echoFloorRms * ADAPT_CEILING_RATIO) {
-                val rate = if (micRms > echoFloorRms) ADAPT_UP_RATE else ADAPT_DOWN_RATE
-                echoFloorRms += (micRms - echoFloorRms) * rate
-                if (echoFloorRms < ECHO_FLOOR_INIT) echoFloorRms = ECHO_FLOOR_INIT
+            // Track the echo level — UPWARD ONLY during a burst. The floor is
+            // re-seeded at the start of each burst, so it never needs to drop:
+            // downward adaptation into mic noise during speech pauses was
+            // leaving the floor too low when the echo resumed, causing the
+            // self-interruption that appears after a few minutes of use.
+            // Only observations above the current floor (up to the ceiling)
+            // raise it; anything louder may be the user and must not deafen
+            // the barge-in detector.
+            if (micRms >= echoFloorRms && micRms <= echoFloorRms * ADAPT_CEILING_RATIO) {
+                echoFloorRms += (micRms - echoFloorRms) * ADAPT_UP_RATE
             }
         }
 
@@ -216,7 +216,6 @@ class SuppressionEchoCanceller(
          * real echo never triggers. */
         private const val ADAPT_CEILING_RATIO = 2.0f
         private const val ADAPT_UP_RATE = 0.10f
-        private const val ADAPT_DOWN_RATE = 0.05f
         /**
          * Barge-in needs the mic this far above the echo floor (~12 dB).
          * Loudspeaker echo alone stays under it; a live voice over the
