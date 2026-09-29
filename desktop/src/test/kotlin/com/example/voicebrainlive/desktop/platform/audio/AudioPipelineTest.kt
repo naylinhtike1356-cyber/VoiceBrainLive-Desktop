@@ -345,8 +345,8 @@ class AudioPipelineTest {
         assertTrue(d2 is EchoDecision.Suppress)
         d2 = canceller.processCapture(voice, render, speechDetected = true)
         assertTrue(
-            d2 is EchoDecision.Suppress,
             "Second barge-in within cooldown should be suppressed, was $d2",
+            d2 is EchoDecision.Suppress,
         )
     }
 

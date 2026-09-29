@@ -1,8 +1,8 @@
 package com.example.voicebrainlive.desktop.platform
 
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertNull
-import org.junit.jupiter.api.Test
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Test
 
 /**
  * Verifies session-resumption handle bookkeeping in [GeminiLiveSession]:
