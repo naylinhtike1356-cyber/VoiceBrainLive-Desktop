@@ -190,7 +190,8 @@ class AssistantController(
         }
     }
 
-    fun updateTranscript(text: String) {        val clean = text.trim()
+    fun updateTranscript(text: String) {
+        val clean = text.trim()
         if (clean.isNotBlank()) {
             val msgs = _state.value.messages
             val last = msgs.lastOrNull()
