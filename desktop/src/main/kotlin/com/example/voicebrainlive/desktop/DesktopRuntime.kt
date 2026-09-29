@@ -354,7 +354,10 @@ class DesktopRuntime(
             onInterrupted = {
                 audio.stopPlayback()
                 controller.markLastAssistantInterrupted()
-                controller.updateStatus("ဆက်လက် နားထောင်နေပါတယ်…")
+                controller.updateStatus(
+                    "ဆက်လက် နားထောင်နေပါတယ်…",
+                    AssistantPhase.LISTENING,
+                )
             },
             onToolCall = { callId, commandType, target, value ->
                 scope.launch {
