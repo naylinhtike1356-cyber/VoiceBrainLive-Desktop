@@ -118,6 +118,8 @@ class DesktopRuntime(
     @Volatile private var closed = false
     @Volatile private var liveAudioReceivedForTurn = false
     @Volatile private var userSpeechDetectedForTurn = false
+    /** Nanos when the current turn's first user speech was detected (for latency telemetry). */
+    @Volatile private var turnSpeechStartNanos = 0L
 
     /** Throttles the periodic rolling audio-latency telemetry log (no audio contents). */
     @Volatile private var lastLatencyReportLogMs = 0L
@@ -267,6 +269,11 @@ class DesktopRuntime(
             onInputTranscript = { text ->
                 if (text.isNotBlank()) {
                     userSpeechDetectedForTurn = true
+                    // Turn-latency telemetry: mark when the user's speech first
+                    // arrives so we can measure speech-to-first-audio delay.
+                    if (turnSpeechStartNanos == 0L) {
+                        turnSpeechStartNanos = System.nanoTime()
+                    }
                     // Privacy: log that a transcript arrived, never its content.
                     DesktopLogger.info("Live input transcript received (${text.trim().length} chars)")
                 }
@@ -291,6 +298,13 @@ class DesktopRuntime(
                 assistant.updateResponse(text, showText = !lastTurnWasVoice)
             },
             onAudioResponse = { payload ->
+                // Turn-latency telemetry: log speech-to-first-audio delay.
+                // This is the "aliveness" number — if it's >700ms, users talk
+                // over the assistant. Helps diagnose "still slow" reports.
+                if (!liveAudioReceivedForTurn && turnSpeechStartNanos != 0L) {
+                    val delayMs = (System.nanoTime() - turnSpeechStartNanos) / 1_000_000L
+                    DesktopLogger.info("Turn latency: speech-to-first-audio = ${delayMs}ms")
+                }
                 liveAudioReceivedForTurn = true
                 // Phase 2: drop the interrupted turn's in-flight audio tail
                 // instead of playing it over the user who just barged in.
@@ -330,6 +344,7 @@ class DesktopRuntime(
                 }
                 liveAudioReceivedForTurn = false
                 userSpeechDetectedForTurn = false
+                turnSpeechStartNanos = 0L
                 if (!audio.isSpeaking()) {
                     controller.updateStatus("အသင့်ဖြစ်ပါပြီ — နားထောင်နေပါသည်")
                 }
@@ -872,6 +887,7 @@ class DesktopRuntime(
         audio.stopPlayback()
         userSpeechDetectedForTurn = false
         liveAudioReceivedForTurn = false
+        turnSpeechStartNanos = 0L
         lastUplinkAudioSentNanos = 0L
         consecutiveAudioSendFailures = 0
         audioSendStallWarned = false
