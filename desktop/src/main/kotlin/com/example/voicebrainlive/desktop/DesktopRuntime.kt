@@ -70,6 +70,12 @@ class DesktopRuntime(
     private val soundEffects = SoundEffects()
     private val commandExecutor = WindowsCommandExecutor()
     private val apiKeyStore = ApiKeyStore()
+    // Phone-as-mic: routing capture is installed into the audio engine below;
+    // the manager swaps the live source between local mic and phone stream.
+    @Volatile private var routingCapture: com.example.voicebrainlive.desktop.platform.phonemic.RoutingAudioCapture? = null
+    val phoneMicManager = com.example.voicebrainlive.desktop.platform.phonemic.PhoneMicManager(
+        routingCaptureProvider = { routingCapture },
+    )
     val userMemoryStore = UserMemoryStore()
     val profileManager = ProfileManager()
     val routineEngine = VoiceRoutineEngine(commandExecutor)
@@ -213,6 +219,21 @@ class DesktopRuntime(
                 )
             },
             selectedMixerName = apiKeyStore.loadAudioInputDevice().ifBlank { null },
+            // Phone-as-mic: wrap the local capture in a router so the phone
+            // mic can take over the live pipeline without engine restart.
+            captureFactory = { tracker ->
+                val local = com.example.voicebrainlive.desktop.platform.audio.JavaxSoundCapture(
+                    onError = { message ->
+                        controller.updateStatus("အသံစနစ် အခက်အခဲ: $message", AssistantPhase.ERROR)
+                    },
+                    latencyTracker = tracker,
+                    mixerName = apiKeyStore.loadAudioInputDevice().ifBlank { null },
+                )
+                com.example.voicebrainlive.desktop.platform.phonemic.RoutingAudioCapture(local).also {
+                    it.setLocalSource(local)
+                    routingCapture = it
+                }
+            },
             echoCancellerFactory = { isPlaying ->
                 com.example.voicebrainlive.desktop.platform.audio.EchoCancellerFactory.create(
                     apiKeyStore.loadEchoCancellerKind(),

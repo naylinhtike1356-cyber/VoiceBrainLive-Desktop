@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="my">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Nilar AI — Phone Mic</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, "Noto Sans Myanmar", sans-serif;
+    background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%);
+    color: #f8fafc; min-height: 100vh; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; padding: 24px;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .card {
+    background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 24px; padding: 32px 28px; width: 100%; max-width: 380px;
+    text-align: center; backdrop-filter: blur(12px);
+  }
+  h1 { font-size: 22px; margin-bottom: 6px; }
+  .sub { color: #94a3b8; font-size: 14px; margin-bottom: 24px; }
+  #micBtn {
+    width: 120px; height: 120px; border-radius: 50%; border: none; cursor: pointer;
+    background: linear-gradient(135deg, #06b6d4, #8b5cf6); color: white;
+    font-size: 44px; margin: 8px auto 20px; display: flex;
+    align-items: center; justify-content: center;
+    box-shadow: 0 8px 32px rgba(6,182,212,0.35);
+    transition: transform 0.15s, box-shadow 0.15s;
+  }
+  #micBtn:active { transform: scale(0.94); }
+  #micBtn.live {
+    background: linear-gradient(135deg, #ef4444, #f97316);
+    box-shadow: 0 8px 32px rgba(239,68,68,0.45);
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.06); } }
+  #status {
+    font-size: 15px; min-height: 22px; margin-bottom: 12px; color: #cbd5e1;
+  }
+  #status.ok { color: #4ade80; } #status.err { color: #f87171; }
+  #levelWrap {
+    height: 8px; background: rgba(255,255,255,0.1); border-radius: 4px;
+    overflow: hidden; margin: 0 0 20px;
+  }
+  #level { height: 100%; width: 0%; background: linear-gradient(90deg,#06b6d4,#8b5cf6); border-radius: 4px; transition: width 60ms; }
+  #pinRow { display: flex; gap: 8px; justify-content: center; margin-top: 8px; }
+  #pinInput {
+    width: 140px; padding: 12px; font-size: 20px; text-align: center; letter-spacing: 6px;
+    border-radius: 12px; border: 1px solid rgba(255,255,255,0.2);
+    background: rgba(0,0,0,0.3); color: white; outline: none;
+  }
+  #pinBtn {
+    padding: 12px 20px; border-radius: 12px; border: none; cursor: pointer;
+    background: #06b6d4; color: white; font-size: 15px; font-weight: 600;
+  }
+  .hint { font-size: 12px; color: #64748b; margin-top: 16px; line-height: 1.6; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>🎙️ Nilar AI</h1>
+  <div class="sub">ဖုန်း မိုက်ခရိုဖုန်း</div>
+
+  <div id="pairSection">
+    <div class="sub">Desktop မှာ ပြထားတဲ့ 6-digit PIN ရိုက်ထည့်ပါ</div>
+    <div id="pinRow">
+      <input id="pinInput" inputmode="numeric" maxlength="6" placeholder="••••••" autocomplete="off">
+      <button id="pinBtn">ချိတ်ဆက်ရန်</button>
+    </div>
+  </div>
+
+  <div id="micSection" class="hidden">
+    <button id="micBtn" aria-label="Mic toggle">🎙️</button>
+    <div id="status">နှိပ်ပြီး စကားပြောပါ</div>
+    <div id="levelWrap"><div id="level"></div></div>
+  </div>
+
+  <div class="hint" id="hint">
+    • ဒီ page ကို ဖွင့်ထားရမယ် (background ထားလို့မရပါ)<br>
+    • Wi-Fi တူညီရမယ် • Screen မပိတ်အောင် ထိန်းထားပေးတယ်
+  </div>
+</div>
+
+<script>
+'use strict';
+// ---- Config (injected by desktop server via query param or defaults) ----
+const qs = new URLSearchParams(location.search);
+let bearerToken = qs.get('token') || '';
+const WS_PATH = '/mic';
+
+// ---- State ----
+let ws = null, audioCtx = null, workletNode = null, micStream = null;
+let streaming = false, seq = 0, wakeLock = null;
+let reconnectTimer = null, reconnectDelay = 1000;
+const $ = id => document.getElementById(id);
+
+// ---- AudioWorklet: capture → downsample to 16kHz PCM16 mono ----
+const WORKLET_CODE = `
+class MicProcessor extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this._inRate = sampleRate;       // device rate (44.1k/48k)
+    this._outRate = 16000;
+    this._buf = new Float32Array(4096);
+    this._bufLen = 0;
+    this._ratio = this._inRate / this._outRate;
+    this._pos = 0;
+  }
+  // Simple low-pass + decimation to avoid aliasing.
+  process(inputs) {
+    const ch = inputs[0];
+    if (!ch || !ch.length) return true;
+    const input = ch[0];
+    // Mix to mono if stereo.
+    let mono;
+    if (ch.length > 1) {
+      mono = new Float32Array(input.length);
+      for (let i = 0; i < input.length; i++) {
+        let s = 0;
+        for (let c = 0; c < ch.length; c++) s += ch[c][i];
+        mono[i] = s / ch.length;
+      }
+    } else mono = input;
+    // Append to accumulator.
+    if (this._bufLen + mono.length > this._buf.length) return true; // drop on overflow
+    this._buf.set(mono, this._bufLen);
+    this._bufLen += mono.length;
+    // Emit 20ms frames (320 samples @16kHz).
+    const FRAME = 320;
+    while (true) {
+      const need = Math.ceil((FRAME + this._pos) * this._ratio);
+      if (this._bufLen < need) break;
+      const out = new Int16Array(FRAME);
+      let idx = this._pos;
+      for (let i = 0; i < FRAME; i++) {
+        const p = Math.floor(idx), f = idx - p;
+        const a = this._buf[p] || 0, b = this._buf[p + 1] || 0;
+        // Linear interpolation + simple 2-tap low-pass via averaging neighbours.
+        let s = a + (b - a) * f;
+        s = Math.max(-1, Math.min(1, s));
+        out[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+        idx += this._ratio;
+      }
+      this._pos = idx - Math.floor(idx);
+      // Compact buffer.
+      const consumed = Math.floor(idx);
+      this._buf.copyWithin(0, consumed, this._bufLen);
+      this._bufLen -= consumed;
+      this.port.postMessage(out.buffer, [out.buffer]);
+    }
+    return true;
+  }
+}
+registerProcessor('nilar-mic', MicProcessor);
+`;
+
+async function ensureAudio() {
+  // iOS Safari: must getUserMedia FIRST, then resume(), then create nodes.
+  micStream = await navigator.mediaDevices.getUserMedia({
+    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+  });
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  await audioCtx.resume();  // critical on iOS after permission dialog
+  const blob = new Blob([WORKLET_CODE], { type: 'application/javascript' });
+  await audioCtx.audioWorklet.addModule(URL.createObjectURL(blob));
+  const src = audioCtx.createMediaStreamSource(micStream);
+  workletNode = new AudioWorkletNode(audioCtx, 'nilar-mic');
+  workletNode.port.onmessage = e => {
+    if (!streaming || !ws || ws.readyState !== WebSocket.OPEN) return;
+    const pcm = new Int16Array(e.data);
+    // Header: seq (uint32 LE) + pcm bytes. Total 4 + 640 = 644 bytes.
+    const frame = new ArrayBuffer(4 + pcm.byteLength);
+    const view = new DataView(frame);
+    view.setUint32(0, seq++, true);
+    new Int16Array(frame, 4).set(pcm);
+    ws.send(frame);
+    // Level meter (cheap RMS on first 64 samples).
+    let sum = 0;
+    for (let i = 0; i < 64; i++) sum += pcm[i] * pcm[i];
+    const rms = Math.sqrt(sum / 64) / 32768;
+    $('level').style.width = Math.min(100, rms * 300).toFixed(0) + '%';
+  };
+  src.connect(workletNode); // no destination — we don't play mic locally
+}
+
+function wsUrl() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return proto + '//' + location.host + WS_PATH + '?token=' + encodeURIComponent(bearerToken);
+}
+
+function connect() {
+  setStatus('ချိတ်ဆက်နေပါတယ်…');
+  ws = new WebSocket(wsUrl());
+  ws.binaryType = 'arraybuffer';
+  ws.onopen = () => {
+    reconnectDelay = 1000;
+    setStatus('အသင့်ဖြစ်ပါပြီ — မိုက်ခလုတ်နှိပ်ပါ', 'ok');
+  };
+  ws.onmessage = e => {
+    // Server text messages: {type:"paired", token?} or {type:"error",...}.
+    try {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'error') setStatus('Error: ' + msg.message, 'err');
+      if (msg.type === 'paired') {
+        // QR one-time tokens are exchanged for a bearer; keep it for reconnects.
+        if (msg.token) {
+          bearerToken = msg.token;
+          try { history.replaceState(null, '', location.pathname + '?token=' + encodeURIComponent(bearerToken)); } catch (_) {}
+        }
+        $('pairSection').classList.add('hidden');
+        $('micSection').classList.remove('hidden');
+      }
+    } catch (_) {}
+  };
+  ws.onclose = () => {
+    if (streaming) stopStream();
+    setStatus('ချိတ်ဆက်မှု ပြတ်သွားပါတယ် — ပြန်ချိတ်နေပါတယ်…', 'err');
+    scheduleReconnect();
+  };
+  ws.onerror = () => { try { ws.close(); } catch (_) {} };
+}
+
+function scheduleReconnect() {
+  clearTimeout(reconnectTimer);
+  reconnectTimer = setTimeout(() => {
+    reconnectDelay = Math.min(10000, reconnectDelay * 2);
+    connect();
+  }, reconnectDelay);
+}
+
+async function startStream() {
+  try {
+    if (!audioCtx) await ensureAudio();
+    else await audioCtx.resume();
+    streaming = true;
+    $('micBtn').classList.add('live');
+    $('micBtn').textContent = '⏹️';
+    setStatus('🎙️ ထုတ်လွှင့်နေပါတယ်…', 'ok');
+    acquireWakeLock();
+  } catch (err) {
+    setStatus('မိုက်ခွင့်ပြုချက် လိုအပ်ပါတယ်: ' + err.message, 'err');
+  }
+}
+
+function stopStream() {
+  streaming = false;
+  $('micBtn').classList.remove('live');
+  $('micBtn').textContent = '🎙️';
+  setStatus('နှိပ်ပြီး စကားပြောပါ');
+  $('level').style.width = '0%';
+}
+
+async function acquireWakeLock() {
+  try {
+    if ('wakeLock' in navigator) {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', () => { if (streaming) acquireWakeLock(); });
+    }
+  } catch (_) {}
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && streaming) acquireWakeLock();
+});
+
+function setStatus(t, cls) {
+  const el = $('status');
+  el.textContent = t;
+  el.className = cls || '';
+}
+
+$('micBtn').addEventListener('click', () => streaming ? stopStream() : startStream());
+
+$('pinBtn').addEventListener('click', async () => {
+  const pin = $('pinInput').value.trim();
+  if (!/^\d{6}$/.test(pin)) { setStatus('PIN 6 လုံး ရိုက်ထည့်ပါ', 'err'); return; }
+  try {
+    const r = await fetch('/pair', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin })
+    });
+    const j = await r.json();
+    if (j.ok) {
+      bearerToken = j.token;
+      history.replaceState(null, '', location.pathname + '?token=' + encodeURIComponent(bearerToken));
+      connect();
+    } else {
+      setStatus('PIN မှားနေပါတယ်', 'err');
+    }
+  } catch (e) { setStatus('ချိတ်ဆက်လို့မရပါ', 'err'); }
+});
+
+// Auto-connect when opened via QR (token in URL).
+if (bearerToken) {
+  $('pairSection').classList.add('hidden');
+  $('micSection').classList.remove('hidden');
+  connect();
+}
+</script>
+</body>
+</html>

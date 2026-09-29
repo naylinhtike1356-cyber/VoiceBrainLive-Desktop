@@ -358,6 +358,7 @@ private fun VoiceBrainDesktopApp(
                         }
                     },
                     onBack = { showSettings = false },
+                    phoneMicManager = runtime.phoneMicManager,
                     onMinimizeToBackground = {
                         showSettings = false
                         onMinimizeToBackground()
@@ -801,6 +802,7 @@ private fun SettingsPanel(
     onBack: () -> Unit,
     onMinimizeToBackground: () -> Unit = {},
     onExitApp: () -> Unit = {},
+    phoneMicManager: com.example.voicebrainlive.desktop.platform.phonemic.PhoneMicManager,
 ) {
     val settingsScroll = rememberScrollState()
 
@@ -1000,6 +1002,9 @@ private fun SettingsPanel(
                 )
             }
         }
+
+        // Phone as Mic Card
+        PhoneMicCard(manager = phoneMicManager)
 
         // Global Shortcuts Card
         Card(
