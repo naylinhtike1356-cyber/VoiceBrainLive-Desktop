@@ -200,6 +200,7 @@ class DesktopRuntime(
             },
             onUserSpeechEnd = {
                 session.noteUserTurnEnd()
+                lastTurnWasVoice = true
                 // Turn-flush pill: the captured turn is being handed to Live.
                 controller.updateStatus("ပို့နေပါတယ်…", AssistantPhase.THINKING)
             },
@@ -282,7 +283,12 @@ class DesktopRuntime(
             onOutputTranscript = { text ->
                 // Privacy: log that a transcript arrived, never its content.
                 DesktopLogger.info("Live output transcript received (${text.trim().length} chars)")
-                assistant.updateResponse(text)
+                // Voice-initiated turn → voice-only reply (no text bubble).
+                // Text-initiated turn → text + voice. The transcription itself
+                // is generated server-side in parallel with the audio, so
+                // hiding it does not change audio latency — it just keeps the
+                // voice interaction clean, as the user requested.
+                assistant.updateResponse(text, showText = !lastTurnWasVoice)
             },
             onAudioResponse = { payload ->
                 liveAudioReceivedForTurn = true
@@ -469,7 +475,16 @@ class DesktopRuntime(
         apiKeyStore.saveRobotVisible(value)
     }
 
+    /**
+     * Tracks whether the current turn was initiated by voice (true) or by
+     * typed text (false). Voice-initiated turns get voice-only replies (no
+     * transcript text in the conversation list) — the user asked to try this
+     * to see if it feels faster and cleaner for voice interaction.
+     */
+    @Volatile private var lastTurnWasVoice = false
+
     fun sendUserMessage(text: String) {
+        lastTurnWasVoice = false
         scope.launch {
             val clean = text.trim()
             if (clean.isBlank()) return@launch

@@ -315,4 +315,46 @@ class AudioPipelineTest {
         h.close()
     }
     //endregion
+
+    //region Barge-in cooldown (false-barge-in oscillation guard)
+
+    /**
+     * After a confirmed barge-in, a second barge-in candidate within the
+     * 2-second cooldown is suppressed. This breaks the false-barge-in
+     * oscillation where speaker echo stops playback, the server keeps
+     * sending, playback resumes, echo triggers again — permanently chopping
+     * the response.
+     */
+    @Test
+    fun bargeInCooldownSuppressesRapidSecondBargeIn() {
+        val canceller = SuppressionEchoCanceller(isPlaying = { true })
+        // Render reference: active speaker. Floor seeds at render*0.5.
+        val render = loudFrame(0.2f)
+        // Mic: user voice well above the 3.0x gate (simulates a real barge-in).
+        val voice = loudFrame(0.5f)
+
+        // First barge-in: 2 consecutive speech frames confirm it.
+        var d1 = canceller.processCapture(voice, render, speechDetected = true)
+        assertTrue(d1 is EchoDecision.Suppress) // first frame held as onset
+        d1 = canceller.processCapture(voice, render, speechDetected = true)
+        assertTrue(d1 is EchoDecision.BargeIn)
+
+        // Immediate second attempt (within cooldown): must be suppressed,
+        // not a second BargeIn.
+        var d2 = canceller.processCapture(voice, render, speechDetected = true)
+        assertTrue(d2 is EchoDecision.Suppress)
+        d2 = canceller.processCapture(voice, render, speechDetected = true)
+        assertTrue(
+            d2 is EchoDecision.Suppress,
+            "Second barge-in within cooldown should be suppressed, was $d2",
+        )
+    }
+
+    /** PCM16 frame with (approximately) the given RMS. */
+    private fun loudFrame(rms: Float): ByteArray =
+        pcm16(FloatArray(frameSamples) { j ->
+            val t = j.toDouble() / 16000
+            (sin(2 * PI * 200 * t) * rms * 1.4142).toFloat()
+        })
+    //endregion
 }

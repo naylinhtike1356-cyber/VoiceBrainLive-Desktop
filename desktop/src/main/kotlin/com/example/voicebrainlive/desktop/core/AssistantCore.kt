@@ -149,9 +149,9 @@ class AssistantController(
         )
     }
 
-    fun updateResponse(text: String) {
+    fun updateResponse(text: String, showText: Boolean = true) {
         val clean = text.trim()
-        if (clean.isNotBlank()) {
+        if (clean.isNotBlank() && showText) {
             val msgs = _state.value.messages
             val last = msgs.lastOrNull()
             val isCurrentTurn = last != null && last.sender == MessageSender.ASSISTANT && (_state.value.phase == AssistantPhase.SPEAKING || _state.value.phase == AssistantPhase.THINKING || last.timestamp > System.currentTimeMillis() - 6000L)

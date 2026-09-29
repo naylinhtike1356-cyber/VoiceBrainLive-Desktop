@@ -51,6 +51,17 @@ class SuppressionEchoCanceller(
     private var echoFloorRms = ECHO_FLOOR_INIT
     private var floorInitializedForBurst = false
 
+    /**
+     * Barge-in cooldown: after a confirmed barge-in, ignore new barge-in
+     * candidates for 2 seconds. Without this, a false barge-in (speaker
+     * echo slipping through the gate) stops playback, the server keeps
+     * sending audio, playback resumes, the echo triggers again — an
+     * oscillation that permanently chops the response. The cooldown breaks
+     * the cycle; a real user interruption is already captured by the first
+     * barge-in, so delaying a second one by 2s is harmless.
+     */
+    private var lastBargeInNanos = 0L
+
     private var echoGatedFrames = 0L
     private var lastGateLogNanos = 0L
 
@@ -119,6 +130,13 @@ class SuppressionEchoCanceller(
         consecutiveSpeechFrames++
         return if (consecutiveSpeechFrames >= bargeInConfirmFrames) {
             consecutiveSpeechFrames = 0
+            // Barge-in cooldown: break the false-barge-in oscillation cycle.
+            val now = System.nanoTime()
+            if (now - lastBargeInNanos < BARGE_IN_COOLDOWN_NANOS) {
+                pendingOnset = null
+                return EchoDecision.Suppress
+            }
+            lastBargeInNanos = now
             val first = pendingOnset
             pendingOnset = null
             EchoDecision.BargeIn(first, micFrame)
@@ -134,6 +152,7 @@ class SuppressionEchoCanceller(
         pendingOnset = null
         echoFloorRms = ECHO_FLOOR_INIT
         floorInitializedForBurst = false
+        lastBargeInNanos = 0L
     }
 
     /** RMS of 16-bit LE mono PCM, normalized 0..1. */
@@ -168,11 +187,14 @@ class SuppressionEchoCanceller(
         private const val ADAPT_UP_RATE = 0.10f
         private const val ADAPT_DOWN_RATE = 0.05f
         /**
-         * Barge-in needs the mic this far above the echo floor (~8 dB).
+         * Barge-in needs the mic this far above the echo floor (~9.5 dB).
          * Loudspeaker echo alone stays under it; a live voice over the
-         * speaker clears it.
+         * speaker clears it. Raised from 2.5 after field reports of the
+         * response cutting off mid-playback from echo slipping through.
          */
-        private const val BARGE_IN_FLOOR_RATIO = 2.5f
+        private const val BARGE_IN_FLOOR_RATIO = 3.0f
         private const val GATE_LOG_INTERVAL_NANOS = 5_000_000_000L
+        /** Cooldown after a confirmed barge-in: breaks false-barge-in oscillation. */
+        private const val BARGE_IN_COOLDOWN_NANOS = 2_000_000_000L
     }
 }
