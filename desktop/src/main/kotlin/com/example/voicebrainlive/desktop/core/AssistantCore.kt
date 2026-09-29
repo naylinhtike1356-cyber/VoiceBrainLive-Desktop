@@ -1,5 +1,6 @@
 package com.example.voicebrainlive.desktop.core
 
+import com.example.voicebrainlive.desktop.platform.DesktopLogger
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -182,6 +183,13 @@ class AssistantController(
         val msgs = _state.value.messages
         val idx = msgs.indexOfLast { it.sender == MessageSender.ASSISTANT }
         if (idx >= 0 && !msgs[idx].interrupted) {
+            // Only mark recent turns: a stale server interruption arriving
+            // after a completed turn must not strike through old history.
+            val ageMs = System.currentTimeMillis() - msgs[idx].timestamp
+            if (ageMs > MAX_INTERRUPTION_AGE_MS) {
+                DesktopLogger.info("Skipping interruption mark for stale turn (age=${ageMs}ms)")
+                return
+            }
             _state.value = _state.value.copy(
                 messages = msgs.toMutableList().also {
                     it[idx] = it[idx].copy(interrupted = true)
@@ -323,5 +331,7 @@ class AssistantController(
 
     private companion object {
         const val MAX_HISTORY = 20
+        /** Max age of a turn that a server interruption may mark. */
+        const val MAX_INTERRUPTION_AGE_MS = 60_000L
     }
 }

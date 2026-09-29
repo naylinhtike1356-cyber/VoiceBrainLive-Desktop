@@ -1025,13 +1025,14 @@ class GeminiLiveSession(
         // Session resumption: the server periodically sends a fresh handle
         // (when resumable=true). Store the latest so reconnect can resume
         // the same session instead of paying a full setup round-trip.
+        // Note: no early return here — the server may combine this update
+        // with other top-level content in one event.
         jsonOrNull?.optJSONObject("sessionResumptionUpdate")?.let { update ->
             val handle = update.optString("newHandle", "").takeIf { it.isNotBlank() }
             if (update.optBoolean("resumable", false) && handle != null) {
                 resumptionHandle = handle
                 DesktopLogger.info("Gemini Live session resumption handle updated")
             }
-            return
         }
 
         runCatching {

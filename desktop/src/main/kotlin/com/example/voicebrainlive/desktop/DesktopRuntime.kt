@@ -124,7 +124,9 @@ class DesktopRuntime(
     @Volatile private var closed = false
     @Volatile private var liveAudioReceivedForTurn = false
     @Volatile private var userSpeechDetectedForTurn = false
-    /** Nanos when the current turn's first user speech was detected (for latency telemetry). */
+    /** Nanos when the local VAD first detected user speech (most accurate turn start). */
+    @Volatile private var vadSpeechOnsetNanos = 0L
+    /** Nanos when the input transcript arrived (fallback if VAD onset missed). */
     @Volatile private var turnSpeechStartNanos = 0L
 
     /** Throttles the periodic rolling audio-latency telemetry log (no audio contents). */
@@ -204,6 +206,10 @@ class DesktopRuntime(
             onUserSpeechStart = { bargeIn ->
                 // "Heard you" pill the moment speech starts.
                 controller.updateStatus("ကြားနေပါတယ်…", AssistantPhase.LISTENING)
+                // Latency telemetry: local VAD onset is the true turn start.
+                if (vadSpeechOnsetNanos == 0L) {
+                    vadSpeechOnsetNanos = System.nanoTime()
+                }
                 if (bargeIn) session.notifyClientBargeIn()
             },
             onUserSpeechEnd = {
@@ -319,12 +325,16 @@ class DesktopRuntime(
                 assistant.updateResponse(text, showText = !lastTurnWasVoice)
             },
             onAudioResponse = { payload ->
-                // Turn-latency telemetry: log speech-to-first-audio delay.
-                // This is the "aliveness" number — if it's >700ms, users talk
-                // over the assistant. Helps diagnose "still slow" reports.
-                if (!liveAudioReceivedForTurn && turnSpeechStartNanos != 0L) {
-                    val delayMs = (System.nanoTime() - turnSpeechStartNanos) / 1_000_000L
-                    DesktopLogger.info("Turn latency: speech-to-first-audio = ${delayMs}ms")
+                // Turn-latency telemetry: VAD-onset-to-first-audio is the true
+                // "aliveness" number. Falls back to transcript-arrival time if
+                // VAD onset was missed. If >700ms, users talk over the assistant.
+                if (!liveAudioReceivedForTurn) {
+                    val startNanos = if (vadSpeechOnsetNanos != 0L) vadSpeechOnsetNanos else turnSpeechStartNanos
+                    if (startNanos != 0L) {
+                        val delayMs = (System.nanoTime() - startNanos) / 1_000_000L
+                        val source = if (vadSpeechOnsetNanos != 0L) "vad-onset" else "transcript"
+                        DesktopLogger.info("Turn latency: $source-to-first-audio = ${delayMs}ms")
+                    }
                 }
                 liveAudioReceivedForTurn = true
                 // Phase 2: drop the interrupted turn's in-flight audio tail
@@ -366,6 +376,7 @@ class DesktopRuntime(
                 liveAudioReceivedForTurn = false
                 userSpeechDetectedForTurn = false
                 turnSpeechStartNanos = 0L
+                vadSpeechOnsetNanos = 0L
                 if (!audio.isSpeaking()) {
                     controller.updateStatus("အသင့်ဖြစ်ပါပြီ — နားထောင်နေပါသည်")
                 }
@@ -909,6 +920,7 @@ class DesktopRuntime(
         userSpeechDetectedForTurn = false
         liveAudioReceivedForTurn = false
         turnSpeechStartNanos = 0L
+        vadSpeechOnsetNanos = 0L
         lastUplinkAudioSentNanos = 0L
         consecutiveAudioSendFailures = 0
         audioSendStallWarned = false
