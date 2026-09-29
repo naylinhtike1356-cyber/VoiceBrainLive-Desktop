@@ -114,8 +114,8 @@ class PhoneMicServer(
                     maxFrameSize = Long.MAX_VALUE
                 }
                 routing {
-                    get("/") { call.respondText(PHONE_MIC_HTML, io.ktor.http.ContentType.Text.Html) }
-                    post("/pair") { call.handlePair() }
+                    get("/") { context.respondText(PHONE_MIC_HTML, io.ktor.http.ContentType.Text.Html) }
+                    post("/pair") { context.handlePair() }
                     webSocket("/mic") { handleMicSocket() }
                 }
             }
