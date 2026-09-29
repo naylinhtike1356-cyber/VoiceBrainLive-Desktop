@@ -6,7 +6,7 @@ import com.google.zxing.qrcode.QRCodeWriter
 import io.ktor.network.tls.certificates.buildKeyStore
 import io.ktor.network.tls.extensions.HashAlgorithm
 import io.ktor.server.application.install
-import io.ktor.server.cio.CIO
+import io.ktor.server.netty.Netty
 import io.ktor.server.engine.ApplicationEngine
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.engine.sslConnector
@@ -133,7 +133,7 @@ class PhoneMicServer(
                 host = "0.0.0.0"
             }
         }
-        engine = embeddedServer(CIO, environment)
+        engine = embeddedServer(Netty, environment)
         scope.launch {
             try {
                 engine?.start(wait = true)

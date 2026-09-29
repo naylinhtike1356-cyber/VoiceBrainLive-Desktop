@@ -115,6 +115,13 @@ class DesktopRuntime(
     @Volatile private var reconnectInProgress = false
     /** Last time an automatic mic-open greeting was spoken (double-tap guard). */
     @Volatile private var lastMicOpenGreetingNanos = 0L
+    /**
+     * Grace period after the mic-open greeting during which server
+     * `interrupted` events are ignored. The greeting echo can reach the mic
+     * and be misclassified as user speech; without this, the greeting cuts
+     * itself off mid-playback.
+     */
+    private val greetingGraceMs = 4_000L
     private val pendingPowerCallLock = Any()
     private var pendingPowerCall: PendingPowerCall? = null
     private var robotVisible = apiKeyStore.loadRobotVisible()
@@ -317,12 +324,9 @@ class DesktopRuntime(
             onOutputTranscript = { text ->
                 // Privacy: log that a transcript arrived, never its content.
                 DesktopLogger.info("Live output transcript received (${text.trim().length} chars)")
-                // Voice-initiated turn → voice-only reply (no text bubble).
-                // Text-initiated turn → text + voice. The transcription itself
-                // is generated server-side in parallel with the audio, so
-                // hiding it does not change audio latency — it just keeps the
-                // voice interaction clean, as the user requested.
-                assistant.updateResponse(text, showText = !lastTurnWasVoice)
+                // Always show the assistant's text — the user asked for the
+                // original behavior where text is visible for every turn.
+                assistant.updateResponse(text, showText = true)
             },
             onAudioResponse = { payload ->
                 // Turn-latency telemetry: VAD-onset-to-first-audio is the true
@@ -399,12 +403,20 @@ class DesktopRuntime(
                 controller.updateStatus("အသင့်ဖြစ်ပါပြီ — နားထောင်နေပါသည်")
             },
             onInterrupted = {
-                audio.stopPlayback()
-                controller.markLastAssistantInterrupted()
-                controller.updateStatus(
-                    "ဆက်လက် နားထောင်နေပါတယ်…",
-                    AssistantPhase.LISTENING,
-                )
+                // Greeting grace: ignore server interruptions shortly after the
+                // mic-open greeting — they're almost always the greeting's own
+                // echo, and honoring them cuts the greeting off mid-sentence.
+                val sinceGreetingMs = (System.nanoTime() - lastMicOpenGreetingNanos) / 1_000_000L
+                if (lastMicOpenGreetingNanos != 0L && sinceGreetingMs < greetingGraceMs) {
+                    DesktopLogger.info("Ignoring interrupted during greeting grace (${sinceGreetingMs}ms)")
+                } else {
+                    audio.stopPlayback()
+                    controller.markLastAssistantInterrupted()
+                    controller.updateStatus(
+                        "ဆက်လက် နားထောင်နေပါတယ်…",
+                        AssistantPhase.LISTENING,
+                    )
+                }
             },
             onToolCall = { callId, commandType, target, value ->
                 scope.launch {
@@ -770,20 +782,22 @@ class DesktopRuntime(
 
     /**
      * App-level heartbeat: the shared OkHttpClient intentionally disables WS
-     * pings, so a half-open socket (uplink audio flowing, server silent) is
-     * detected here. When the user has been speaking but nothing has arrived
-     * from the server for ~10s, reconnect.
+     * pings, so a half-open socket is detected here. Only triggers when we're
+     * actually waiting for a server response (user spoke, turn not complete).
+     * An open mic always sends audio — even silence — so "uplink flowing"
+     * alone caused false reconnects during normal idle periods.
      */
     private fun installLivenessMonitor() {
         scope.launch {
             while (!closed) {
                 delay(5_000L)
                 if (closed || !listening.get() || reconnectInProgress) continue
-                val uplinkRecent = lastUplinkAudioSentNanos != 0L &&
-                    (System.nanoTime() - lastUplinkAudioSentNanos) / 1_000_000L < 10_000L
-                if (uplinkRecent && !session.probeLiveness(10_000L)) {
+                // vadSpeechOnsetNanos is cleared on turn completion, so a
+                // non-zero value means the user spoke and we're still waiting.
+                val waitingForResponse = vadSpeechOnsetNanos != 0L
+                if (waitingForResponse && !session.probeLiveness(15_000L)) {
                     DesktopLogger.warn(
-                        "Liveness probe failed: uplink audio flowing but no server activity for " +
+                        "Liveness probe failed: user spoke but no server activity for " +
                             "${session.lastServerActivityElapsedMs()}ms — reconnecting",
                     )
                     controller.updateStatus("ပြန်လည်ချိတ်ဆက်နေပါသည်…", AssistantPhase.CONNECTING)

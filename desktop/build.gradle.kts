@@ -25,8 +25,9 @@ dependencies {
     implementation("net.java.dev.jna:jna:5.14.0")
     implementation("net.java.dev.jna:jna-platform:5.14.0")
     // Phone-as-mic: embedded HTTPS+WebSocket server for phone browser client.
+    // Netty (not CIO) because CIO does not support HTTPS server connectors.
     implementation(libs.ktor.server.core)
-    implementation(libs.ktor.server.cio)
+    implementation(libs.ktor.server.netty)
     implementation(libs.ktor.server.websockets)
     implementation(libs.ktor.server.tls.certificates)
     // QR code generation for phone pairing.
