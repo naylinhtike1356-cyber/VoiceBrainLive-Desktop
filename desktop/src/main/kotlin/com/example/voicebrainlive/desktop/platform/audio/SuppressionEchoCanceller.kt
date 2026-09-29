@@ -205,22 +205,25 @@ class SuppressionEchoCanceller(
         /**
          * Prior room coupling used to seed the floor: pure echo is assumed to
          * reach the mic at most this fraction of the digital render level.
-         * -6 dB is conservative for laptop speakers.
+         * 0.7 (-3 dB) is conservative for laptop speakers near the mic; the
+         * old 0.5 underestimated loud setups, leaving the floor too low and
+         * letting echo transients false-trigger barge-in.
          */
-        private const val PRIOR_COUPLING = 0.5f
+        private const val PRIOR_COUPLING = 0.7f
         /** Observations above floor*this never adapt the floor (may be user).
-         * 1.5 leaves a dead zone below the 2.5 barge-in ratio: ambiguous
-         * levels neither train the floor nor trigger barge-in. */
-        private const val ADAPT_CEILING_RATIO = 1.5f
+         * 2.0 lets the floor learn the true echo level even when the initial
+         * estimate was low; the barge-in ratio (4.0) stays well above it so
+         * real echo never triggers. */
+        private const val ADAPT_CEILING_RATIO = 2.0f
         private const val ADAPT_UP_RATE = 0.10f
         private const val ADAPT_DOWN_RATE = 0.05f
         /**
-         * Barge-in needs the mic this far above the echo floor (~9.5 dB).
+         * Barge-in needs the mic this far above the echo floor (~12 dB).
          * Loudspeaker echo alone stays under it; a live voice over the
-         * speaker clears it. Raised from 2.5 after field reports of the
-         * response cutting off mid-playback from echo slipping through.
+         * speaker clears it. Raised from 3.0 after field reports of the
+         * assistant's own voice false-triggering barge-in mid-response.
          */
-        private const val BARGE_IN_FLOOR_RATIO = 3.0f
+        private const val BARGE_IN_FLOOR_RATIO = 4.0f
         private const val GATE_LOG_INTERVAL_NANOS = 5_000_000_000L
         /** Cooldown after a confirmed barge-in: breaks false-barge-in oscillation. */
         private const val BARGE_IN_COOLDOWN_NANOS = 2_000_000_000L

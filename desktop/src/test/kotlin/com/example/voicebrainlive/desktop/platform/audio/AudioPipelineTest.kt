@@ -328,10 +328,10 @@ class AudioPipelineTest {
     @Test
     fun bargeInCooldownSuppressesRapidSecondBargeIn() {
         val canceller = SuppressionEchoCanceller(isPlaying = { true }, burstStartGuardMs = 0L)
-        // Render reference: active speaker. Floor seeds at render*0.5.
+        // Render reference: active speaker. Floor seeds at render*0.7.
         val render = loudFrame(0.2f)
-        // Mic: user voice well above the 3.0x gate (simulates a real barge-in).
-        val voice = loudFrame(0.5f)
+        // Mic: user voice well above the 4.0x gate (0.14*4=0.56; 0.7 clears it).
+        val voice = loudFrame(0.7f)
 
         // First barge-in: 2 consecutive speech frames confirm it.
         var d1 = canceller.processCapture(voice, render, speechDetected = true)
