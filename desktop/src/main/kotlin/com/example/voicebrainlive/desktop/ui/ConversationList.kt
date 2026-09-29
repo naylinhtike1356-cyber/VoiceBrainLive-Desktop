@@ -42,6 +42,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.voicebrainlive.desktop.core.AssistantPhase
@@ -251,10 +252,33 @@ private fun MessageBubble(
                             }
                         }
                         Row {
-                            Text(text = message.text, style = NilarType.Body)
+                            Text(
+                                text = message.text,
+                                style = NilarType.Body.copy(
+                                    // Interrupted turns get a strike-through so the
+                                    // user sees exactly what was cut off.
+                                    textDecoration = if (message.interrupted) {
+                                        TextDecoration.LineThrough
+                                    } else {
+                                        TextDecoration.None
+                                    },
+                                    color = if (message.interrupted) {
+                                        NilarColors.TextSub
+                                    } else {
+                                        NilarColors.TextMain
+                                    },
+                                ),
+                            )
                             if (streaming) {
                                 StreamingCaret(color = accent)
                             }
+                        }
+                        // Burmese label for interrupted turns.
+                        if (message.interrupted) {
+                            Text(
+                                text = "⛔ ဖြတ်တောက်ခံရသည်",
+                                style = NilarType.Caption.copy(color = NilarColors.TextSub),
+                            )
                         }
                     }
                 }

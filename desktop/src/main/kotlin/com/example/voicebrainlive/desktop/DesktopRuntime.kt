@@ -353,6 +353,7 @@ class DesktopRuntime(
             },
             onInterrupted = {
                 audio.stopPlayback()
+                controller.markLastAssistantInterrupted()
                 controller.updateStatus("ဆက်လက် နားထောင်နေပါတယ်…")
             },
             onToolCall = { callId, commandType, target, value ->

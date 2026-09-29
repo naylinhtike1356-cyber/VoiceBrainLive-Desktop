@@ -66,6 +66,8 @@ data class ChatMessage(
     val timestamp: Long = System.currentTimeMillis(),
     val commandType: String? = null,
     val commandSuccess: Boolean? = null,
+    /** True when this assistant turn was cut off by a user barge-in. */
+    val interrupted: Boolean = false,
 )
 
 data class AssistantUiState(
@@ -171,8 +173,24 @@ class AssistantController(
         }
     }
 
-    fun updateTranscript(text: String) {
-        val clean = text.trim()
+    /**
+     * Marks the most recent assistant message as interrupted (cut off by a
+     * user barge-in). The UI renders it with a strike-through so the user
+     * can see exactly what was cancelled.
+     */
+    fun markLastAssistantInterrupted() {
+        val msgs = _state.value.messages
+        val idx = msgs.indexOfLast { it.sender == MessageSender.ASSISTANT }
+        if (idx >= 0 && !msgs[idx].interrupted) {
+            _state.value = _state.value.copy(
+                messages = msgs.toMutableList().also {
+                    it[idx] = it[idx].copy(interrupted = true)
+                }
+            )
+        }
+    }
+
+    fun updateTranscript(text: String) {        val clean = text.trim()
         if (clean.isNotBlank()) {
             val msgs = _state.value.messages
             val last = msgs.lastOrNull()
