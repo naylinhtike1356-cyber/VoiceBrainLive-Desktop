@@ -89,23 +89,24 @@ import com.example.voicebrainlive.desktop.ui.AuroraBackground
 import com.example.voicebrainlive.desktop.ui.ConversationList
 import com.example.voicebrainlive.desktop.ui.NeuralBrainScreen
 import com.example.voicebrainlive.desktop.ui.NilarColors
+import com.example.voicebrainlive.desktop.ui.PhoneMicCard
 import com.example.voicebrainlive.desktop.ui.NilarRadii
 import com.example.voicebrainlive.desktop.ui.NilarType
 
 // Modern Glassmorphic Dark Theme Palette
-private val DarkBg = Color(0xFF070B14)
-private val DarkBgSecondary = Color(0xFF0F172A)
-private val CardBg = Color(0xEE0E1626)
-private val CardSoft = Color(0xEE162238)
-private val CardHighlight = Color(0xEE1E2E4A)
-private val AccentMint = Color(0xFF00F5D4)
-private val AccentCyan = Color(0xFF38BDF8)
+val DarkBg = Color(0xFF070B14)
+val DarkBgSecondary = Color(0xFF0F172A)
+val CardBg = Color(0xEE0E1626)
+val CardSoft = Color(0xEE162238)
+val CardHighlight = Color(0xEE1E2E4A)
+val AccentMint = Color(0xFF00F5D4)
+val AccentCyan = Color(0xFF38BDF8)
 private val AccentPurple = Color(0xFFA78BFA)
 private val AccentGold = Color(0xFFFBBF24)
 private val AccentRose = Color(0xFFFB7185)
-private val TextMain = Color(0xFFF8FAFC)
-private val TextSub = Color(0xFF94A3B8)
-private val BorderColor = Color(0xFF1E293B)
+val TextMain = Color(0xFFF8FAFC)
+val TextSub = Color(0xFF94A3B8)
+val BorderColor = Color(0xFF1E293B)
 private val BorderGlow = Color(0xFF334155)
 
 fun main() {

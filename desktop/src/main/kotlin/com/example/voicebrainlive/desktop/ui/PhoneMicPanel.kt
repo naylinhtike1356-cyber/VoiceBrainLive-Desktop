@@ -27,10 +27,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.voicebrainlive.desktop.AccentMint
+import com.example.voicebrainlive.desktop.BorderColor
+import com.example.voicebrainlive.desktop.CardBg
+import com.example.voicebrainlive.desktop.TextMain
+import com.example.voicebrainlive.desktop.TextSub
 import com.example.voicebrainlive.desktop.platform.phonemic.PhoneMicManager
 import java.awt.image.BufferedImage
 
@@ -146,7 +151,7 @@ private fun PhoneMicPairingView(
                 val size = pixels.size
                 val img = BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB)
                 for (y in 0 until size) for (x in 0 until size) img.setRGB(x, y, pixels[y][x])
-                img.asImageBitmap()
+                img.toComposeImageBitmap()
             }
         }
         if (bitmap != null) {

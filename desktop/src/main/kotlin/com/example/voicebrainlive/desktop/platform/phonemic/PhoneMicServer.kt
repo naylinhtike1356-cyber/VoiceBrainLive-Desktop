@@ -16,11 +16,11 @@ import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
 import io.ktor.server.websocket.DefaultWebSocketServerSession
-import io.ktor.server.websocket.Frame
 import io.ktor.server.websocket.WebSockets
 import io.ktor.server.websocket.pingPeriod
 import io.ktor.server.websocket.timeout
 import io.ktor.server.websocket.webSocket
+import io.ktor.websocket.Frame
 import io.ktor.websocket.close
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -115,7 +115,7 @@ class PhoneMicServer(
                 }
                 routing {
                     get("/") { call.respondText(PHONE_MIC_HTML, io.ktor.http.ContentType.Text.Html) }
-                    post("/pair") { handlePair() }
+                    post("/pair") { call.handlePair() }
                     webSocket("/mic") { handleMicSocket() }
                 }
             }
