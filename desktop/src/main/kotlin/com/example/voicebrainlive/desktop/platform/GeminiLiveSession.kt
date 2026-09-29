@@ -65,6 +65,11 @@ class GeminiLiveSession(
     // read on Dispatchers.IO in connect(). Must be volatile.
     @Volatile private var model: String = "models/$normalizedModel"
 
+    // Session resumption handle from the server's sessionResumptionUpdate
+    // messages. Sent back in setup on reconnect so the server resumes the
+    // same Live session (2h validity) instead of starting a fresh one.
+    @Volatile private var resumptionHandle: String? = null
+
     // Single shared OkHttpClient is intentional: its dispatcher threads and
     // connection pool are reused across reconnects by design (not a leak).
     private val client = OkHttpClient.Builder()
@@ -353,7 +358,18 @@ class GeminiLiveSession(
                 // resumption handles in sessionResumptionUpdate messages, so a
                 // dropped socket can resume the same Live session instead of
                 // paying a full setup round-trip on reconnect.
-                put("sessionResumption", JSONObject())
+                put("sessionResumption", JSONObject().apply {
+                    // Send the last known handle when reconnecting; the server
+                    // resumes the session if the handle is still valid (2h).
+                    resumptionHandle?.takeIf { it.isNotBlank() }?.let { put("handle", it) }
+                })
+                // Sliding-window context compression: audio consumes ~25 tokens/s,
+                // so a long conversation would exhaust the context window and kill
+                // the session. Compression preserves system instructions and keeps
+                // the session alive indefinitely.
+                put("contextWindowCompression", JSONObject().apply {
+                    put("slidingWindow", JSONObject())
+                })
                 put("inputAudioTranscription", JSONObject())
                 put("outputAudioTranscription", JSONObject())
                 put("systemInstruction", JSONObject().apply {
@@ -1003,6 +1019,18 @@ class GeminiLiveSession(
             drainAudioBuffer()
             onStatus("Gemini Live Mode အသင့်ဖြစ်ပါပြီ")
             onSetupComplete()
+            return
+        }
+
+        // Session resumption: the server periodically sends a fresh handle
+        // (when resumable=true). Store the latest so reconnect can resume
+        // the same session instead of paying a full setup round-trip.
+        jsonOrNull?.optJSONObject("sessionResumptionUpdate")?.let { update ->
+            val handle = update.optString("newHandle", "").takeIf { it.isNotBlank() }
+            if (update.optBoolean("resumable", false) && handle != null) {
+                resumptionHandle = handle
+                DesktopLogger.info("Gemini Live session resumption handle updated")
+            }
             return
         }
 
