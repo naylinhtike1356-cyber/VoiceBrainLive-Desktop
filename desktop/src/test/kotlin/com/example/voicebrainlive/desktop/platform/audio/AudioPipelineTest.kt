@@ -113,7 +113,7 @@ class AudioPipelineTest {
 
     @Test
     fun suppressionSuppressesDuringPlaybackUntilBargeIn() {
-        val canceller = SuppressionEchoCanceller(isPlaying = { true })
+        val canceller = SuppressionEchoCanceller(isPlaying = { true }, burstStartGuardMs = 0L)
         val frame = burstFrame(0)
         // First speech frame: held for confirmation, not forwarded.
         assertTrue(canceller.processCapture(frame, null, speechDetected = true) is EchoDecision.Suppress)
@@ -142,7 +142,7 @@ class AudioPipelineTest {
         // The echo trips the VAD, but the gate must never let it become a
         // barge-in — otherwise the assistant interrupts itself and its
         // responses are never heard.
-        val canceller = SuppressionEchoCanceller(isPlaying = { true })
+        val canceller = SuppressionEchoCanceller(isPlaying = { true }, burstStartGuardMs = 0L)
         val render = toneFrame(0.30f) // RMS ~0.21
         val echo = toneFrame(0.06f) // room-attenuated echo, RMS ~0.042
         repeat(40) {
@@ -158,7 +158,7 @@ class AudioPipelineTest {
     fun echoGateAllowsRealBargeInOverSpeaker() {
         // User speaks firmly over the playing speaker: the mic level sits
         // clearly above the learned echo floor → barge-in must still work.
-        val canceller = SuppressionEchoCanceller(isPlaying = { true })
+        val canceller = SuppressionEchoCanceller(isPlaying = { true }, burstStartGuardMs = 0L)
         val render = toneFrame(0.30f) // RMS ~0.21
         val echo = toneFrame(0.06f)
         // Let the floor converge on the echo first (a few frames).
@@ -178,7 +178,7 @@ class AudioPipelineTest {
     fun bargeInWorksWhenSpeakerIsSilent() {
         // Speaker-silent gap during playback (render reference silent): the
         // VAD verdict alone is trustworthy — no echo to gate against.
-        val canceller = SuppressionEchoCanceller(isPlaying = { true })
+        val canceller = SuppressionEchoCanceller(isPlaying = { true }, burstStartGuardMs = 0L)
         val silentRender = ByteArray(frameSamples * 2)
         val frame = burstFrame(0)
         assertTrue(canceller.processCapture(frame, silentRender, speechDetected = true) is EchoDecision.Suppress)
@@ -327,7 +327,7 @@ class AudioPipelineTest {
      */
     @Test
     fun bargeInCooldownSuppressesRapidSecondBargeIn() {
-        val canceller = SuppressionEchoCanceller(isPlaying = { true })
+        val canceller = SuppressionEchoCanceller(isPlaying = { true }, burstStartGuardMs = 0L)
         // Render reference: active speaker. Floor seeds at render*0.5.
         val render = loudFrame(0.2f)
         // Mic: user voice well above the 3.0x gate (simulates a real barge-in).
@@ -348,6 +348,29 @@ class AudioPipelineTest {
             "Second barge-in within cooldown should be suppressed, was $d2",
             d2 is EchoDecision.Suppress,
         )
+    }
+
+    /**
+     * Burst-start guard: during the first 500ms of assistant playback,
+     * even loud mic input must NOT trigger barge-in. This prevents the
+     * assistant's own opening syllables from false-triggering self-
+     * interruption before the echo floor stabilizes.
+     */
+    @Test
+    fun burstStartGuardSuppressesBargeIn() {
+        val canceller = SuppressionEchoCanceller(
+            isPlaying = { true },
+            burstStartGuardMs = 500L,
+        )
+        val render = loudFrame(0.2f)
+        // Very loud mic input that would normally barge in immediately.
+        val voice = loudFrame(0.8f)
+
+        // Within the guard window: must be suppressed, not BargeIn.
+        repeat(5) {
+            val d = canceller.processCapture(voice, render, speechDetected = true)
+            assertTrue("Barge-in during burst guard should be suppressed, was $d", d is EchoDecision.Suppress)
+        }
     }
 
     /** PCM16 frame with (approximately) the given RMS. */

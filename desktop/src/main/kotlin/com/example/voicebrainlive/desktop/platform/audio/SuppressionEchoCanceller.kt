@@ -35,6 +35,7 @@ import com.example.voicebrainlive.desktop.platform.DesktopLogger
 class SuppressionEchoCanceller(
     private val isPlaying: () -> Boolean,
     private val bargeInConfirmFrames: Int = 2,
+    private val burstStartGuardMs: Long = 500L,
 ) : EchoCanceller {
 
     override val isFullDuplexCapable: Boolean = false
@@ -50,6 +51,17 @@ class SuppressionEchoCanceller(
      */
     private var echoFloorRms = ECHO_FLOOR_INIT
     private var floorInitializedForBurst = false
+    /**
+     * Burst-start guard: for the first 500ms of each playback burst, barge-in
+     * is suppressed entirely. The echo floor needs a few frames to stabilize,
+     * and the initial estimate can be far off (loud speakers, sensitive mic).
+     * Without this, the first syllables of the assistant's own speech can
+     * false-trigger barge-in before the floor adapts — the self-interruption
+     * in the screenshot. A real user interruption 500ms into playback still
+     * works; an interruption in the first 500ms is rare and the user can
+     * simply speak again.
+     */
+    private var burstStartNanos = 0L
 
     /**
      * Barge-in cooldown: after a confirmed barge-in, ignore new barge-in
@@ -108,6 +120,21 @@ class SuppressionEchoCanceller(
             return EchoDecision.Suppress
         }
 
+        // Burst-start guard: suppress barge-in for the first 500ms of playback
+        // while the echo floor stabilizes. Prevents self-interruption from
+        // the assistant's own opening syllables.
+        if (speakerActive) {
+            val now = System.nanoTime()
+            if (burstStartNanos == 0L) burstStartNanos = now
+            if ((now - burstStartNanos) / 1_000_000L < burstStartGuardMs) {
+                consecutiveSpeechFrames = 0
+                pendingOnset = null
+                return EchoDecision.Suppress
+            }
+        } else {
+            burstStartNanos = 0L
+        }
+
         // Echo gate — only while the speaker is emitting: the frame must sit
         // clearly above the learned echo floor to count toward barge-in.
         // Speaker echo alone never passes, so the assistant can no longer
@@ -153,6 +180,7 @@ class SuppressionEchoCanceller(
         echoFloorRms = ECHO_FLOOR_INIT
         floorInitializedForBurst = false
         lastBargeInNanos = 0L
+        burstStartNanos = 0L
     }
 
     /** RMS of 16-bit LE mono PCM, normalized 0..1. */
